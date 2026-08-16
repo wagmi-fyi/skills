@@ -1,0 +1,19 @@
+# QBO skill — Python dependencies (pinned, reproducible).
+#
+# Install into the project venv (one command):
+#   uv-managed venv:  uv pip install --python .venv/bin/python -r ~/.claude/skills/qbo/requirements.txt
+#   plain venv:       .venv/bin/pip install -r ~/.claude/skills/qbo/requirements.txt
+#
+# import name -> PyPI PACKAGE name (pip needs the package name; some differ):
+#   quickbooks  -> python-quickbooks   QBO SDK
+#   intuitlib   -> intuit-oauth        OAuth client. NOT "intuitlib" on PyPI — that is the
+#                                      import name. `pip install intuitlib` grabs the wrong
+#                                      project. (python-quickbooks pulls it in transitively too;
+#                                      listed explicitly because qbo_client.py imports it directly.)
+#   dotenv      -> python-dotenv       .env loader
+#
+# Pins verified to install + import on Python 3.12 and 3.14.
+# All three are pure-Python (py3-none-any) wheels, so they resolve on any 3.x.
+python-quickbooks==0.9.12
+intuit-oauth==1.2.6
+python-dotenv==1.2.2

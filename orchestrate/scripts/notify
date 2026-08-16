@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# orchestrate/notify — cross-platform desktop alert + terminal bell for a
+# crossroads / human-only escalation. Usage: notify <title> <message>
+TITLE="${1:-orchestrate}"; MSG="${2:-needs your input}"
+printf '\a' 2>/dev/null || true                       # terminal bell — universal
+case "$(uname -s)" in
+  Darwin)
+    osascript -e "display notification \"${MSG//\"/\\\"}\" with title \"${TITLE//\"/\\\"}\" sound name \"Submarine\"" >/dev/null 2>&1 || true ;;
+  Linux)
+    command -v notify-send >/dev/null 2>&1 && notify-send "$TITLE" "$MSG" || true ;;
+  *)  # Windows (git-bash / cygwin): best-effort toast, else just the bell + stdout
+    command -v powershell.exe >/dev/null 2>&1 && \
+      powershell.exe -NoProfile -Command "[reflection.assembly]::loadwithpartialname('System.Windows.Forms')>\$null; [System.Windows.Forms.MessageBox]::Show('${MSG//\'/}','${TITLE//\'/}')" >/dev/null 2>&1 || true ;;
+esac
+echo "🔔 [$TITLE] $MSG"

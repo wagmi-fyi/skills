@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# orchestrate/spawn — open a VISIBLE tmux pane running a delegate session.
+# Usage: spawn <handle> [initial-instruction]
+# The orchestrator should `bus send` the unit's assignment BEFORE spawning.
+set -euo pipefail
+HANDLE="${1:?usage: spawn <handle> [initial-instruction]}"
+SKILL="$(cd "$(dirname "$0")/.." && pwd)"
+BUS="$SKILL/scripts/bus"
+
+if [ -z "${TMUX:-}" ]; then
+  echo "not inside tmux — cannot open a visible pane." >&2
+  echo "run the orchestrator inside tmux (tmux new -s orch), or set spawn_mode: manual." >&2
+  exit 1
+fi
+command -v claude >/dev/null || { echo "claude CLI not found on PATH" >&2; exit 1; }
+
+INIT="${2:-You are the orchestrate delegate '$HANDLE'. Bootstrap in this order: (1) invoke the /orchestrate skill, 'delegate' operation, to load your contract + method; (2) the bus CLI is at ~/.claude/skills/orchestrate/scripts/bus and is NOT on PATH — call it by that full path: '~/.claude/skills/orchestrate/scripts/bus init $HANDLE --pane \$TMUX_PANE --role worker' then '~/.claude/skills/orchestrate/scripts/bus inbox $HANDLE'; (3) your inbox carries a --ref pointer to your full prompt — read that file and execute it. Stay in this pane — the human can reach you here.}"
+
+# opt-in: launch delegates with --dangerously-skip-permissions so they don't stall on prompts (config: delegate_skip_permissions)
+FLAGS=""
+if grep -Eqi '^[[:space:]]*delegate_skip_permissions:[[:space:]]*true' "$SKILL/config.yaml" 2>/dev/null; then
+  FLAGS="--dangerously-skip-permissions "
+fi
+
+# new visible window named for the handle; keep a shell after claude exits so the pane persists
+PANE=$(tmux new-window -P -F '#{pane_id}' -n "$HANDLE" "claude ${FLAGS}$(printf '%q' "$INIT"); exec \${SHELL:-/bin/sh}")
+# pre-register the pane so push-wake works immediately (delegate also self-registers on bus init)
+"$BUS" init "$HANDLE" --pane "$PANE" --role worker >/dev/null 2>&1 || true
+echo "spawned delegate '$HANDLE' in pane $PANE  (Ctrl-b + window number to view)"
