@@ -1,0 +1,38 @@
+# Bookkeeping skill — Python dependencies (pinned, reproducible).
+#
+# Install into the project venv (one command):
+#   uv-managed venv:  uv pip install --python .venv/bin/python -r ~/.claude/skills/bookkeeping/requirements.txt
+#   plain venv:       .venv/bin/pip install -r ~/.claude/skills/bookkeeping/requirements.txt
+#
+# Grouped CORE vs. ADAPTER. Bookkeeping's SoR/feed integrations are pluggable adapters, so are their
+# deps. Pure-core (CSV ingest -> categorize -> reconcile -> SQLite staging) needs only pyyaml; the
+# heavy SDK chains are adapter-tier. The full file is the safe default — every current deployment
+# uses QBO. For a minimal or non-QBO (e.g. Xero) deployment, install Core + only the adapter blocks
+# in use. (Splitting into per-adapter files is the cheap upgrade once such a deployment exists.)
+#
+# import name -> PyPI PACKAGE name (pip needs the PACKAGE name; some differ):
+#   yaml -> pyyaml  |  dotenv -> python-dotenv  |  quickbooks -> python-quickbooks
+#   intuitlib -> intuit-oauth  |  stripe -> stripe  |  openpyxl -> openpyxl
+# WARNING: intuitlib ships on PyPI as intuit-oauth. `pip install intuitlib` grabs the WRONG project.
+#
+# Pins verified to install + import on Python 3.12 and 3.14. All are
+# pure-Python (py3-none-any) wheels except PyYAML, which ships cp312 + cp314 wheels.
+
+# --- Core: ingest, categorize, reconcile, SQLite staging (config.yaml parsing) ---
+pyyaml==6.0.3
+
+# --- Shared by every credentialed adapter (QBO, Stripe FC, AMA): .env loader ---
+python-dotenv==1.2.2
+
+# --- QBO adapter: system-of-record publish. Equals the /qbo skill's SDK deps, which bookkeeping
+#     re-exports at runtime (adapters/qbo/_shared/client.py puts ~/.claude/skills/qbo/scripts on
+#     sys.path), so /qbo must be installed and its packages present. intuit-oauth is also pulled in
+#     transitively by python-quickbooks. ---
+python-quickbooks==0.9.12
+intuit-oauth==1.2.6
+
+# --- Stripe Financial Connections adapter (adapters/stripe_fc_*.py) ---
+stripe==15.2.1
+
+# --- Excel export (adapters/export_to_excel.py) ---
+openpyxl==3.1.5

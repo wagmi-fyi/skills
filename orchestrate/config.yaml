@@ -1,0 +1,28 @@
+# orchestrate skill configuration — per-machine / per-org. Safe to edit.
+
+# Where generated project artifacts (plan.md + workpaper.md) are written.
+#   - absolute path, OR relative to the orchestrator's working dir / repo root
+#   - leave BLANK to have `bootstrap` establish it from repo conventions + confirm
+#   - this default ships blank ON PURPOSE — an org/repo-specific dir is a convention, not a default
+output_dir: ""              # examples: "docs/orchestrations"  |  ".orchestrations"  |  "/abs/path"
+
+# Bus data location (machine-level; the bus CLI also honors $SESSION_BUS_DIR).
+bus_dir: "~/.claude/session-bus"
+
+# Default delegation launch:
+#   "auto-spawn" — orchestrator opens visible tmux panes for delegates
+#   "manual"     — human launches each delegated session
+spawn_mode: "auto-spawn"
+
+# How a delegate pane is retired (bookends spawn_mode):
+#   "manual" — orchestrator never closes; it surfaces "ready — review + close it yourself," you close the window
+#   "auto"   — orchestrator closes it once the unit is done + verified
+close_mode: "manual"
+
+# Launch spawned delegates with --dangerously-skip-permissions, so they don't stall on
+# permission prompts (matches an operator who runs claude that way). A general/shared
+# deployment ships this FALSE — it's a security bypass; opt in deliberately, per machine.
+delegate_skip_permissions: false
+
+# Crossroads / human-only escalation: raise a desktop notification + pause the unit.
+notify: true

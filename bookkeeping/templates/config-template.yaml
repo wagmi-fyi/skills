@@ -1,0 +1,53 @@
+# Bookkeeping Configuration
+# Edit these values to customize your experience
+
+# Core
+user_name: Bookkeeping Team
+communication_language: English
+document_output_language: English
+
+# Paths
+module_root: "~/.claude/skills/bookkeeping"
+local_dir: "{project-root}/_local-bookkeeping"
+output_folder: "{project-root}/_bk-output"
+
+# Firm context (optional — omit or leave empty for solo deployments)
+firm_root: ""              # e.g., "~/.claude/bookkeeping-firm"
+firm_id: ""                # e.g., "example-accounting"
+
+# Database (Staging Layer Design)
+# Domain-specific database: bookkeeping.db contains all bookkeeping tables
+# SQLite is the processing workspace - external SoR (QBO, Xero, etc.) is the final destination
+# Data flows: Source → SQLite → Process → Publish to SoR
+# Cross-module queries (e.g., tax reading from bookkeeping) use ATTACH DATABASE
+database_dir: "{project-root}/database"
+database_name: "bookkeeping.db"
+
+# Client
+client_name: ""
+client_id: ""
+
+# Module-specific
+workpapers_dir: "{output_folder}/workpapers"
+default_system_of_record: ""
+
+# Period configuration
+# period_type defines the default close period format:
+#   calendar-monthly — period entered as YYYY-MM, auto-expands to full calendar month
+#   fiscal           — period entered as YYYY-PNN, resolved via fiscal calendar lookup
+#   date-range       — period entered as YYYY-MM-DD_YYYY-MM-DD, explicit start/end
+# All formats resolve to {periodLabel, periodStart, periodEnd, periodType} at runtime.
+# The workflow accepts any format at init time regardless of default.
+period_type: "calendar-monthly"
+# Required when period_type is "fiscal" — path to the fiscal calendar definition
+fiscal_calendar: ""  # e.g., "{local_dir}/content/period-close/fiscal-calendar.yaml"
+
+# Coding workflow — confidence scoring (1-10 scale)
+# Three zones: client questions | judgment calls | auto-approved
+#   [1, min_confidence_to_categorize)  → client questions (processed=2, no JE)
+#   [min_confidence_to_categorize, min_confidence_to_auto_approve) → judgment calls (JE created, surfaced for review)
+#   [min_confidence_to_auto_approve, 10] → auto-approved (JE created, no review needed)
+# Set min_confidence_to_auto_approve to 11 to disable auto-approvals (all categorized items get reviewed)
+coding:
+  min_confidence_to_categorize: 5
+  min_confidence_to_auto_approve: 9

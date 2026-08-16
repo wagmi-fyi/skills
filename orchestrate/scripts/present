@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# orchestrate/present — open a decision-brief HTML in the default browser, cross-platform.
+# Usage: present <file.html>   (typically /tmp/<decision-slug>.html)
+set -euo pipefail
+F="${1:?usage: present <file.html>}"
+[ -f "$F" ] || { echo "no such file: $F" >&2; exit 1; }
+ABS="$(cd "$(dirname "$F")" && pwd)/$(basename "$F")"
+case "$(uname -s)" in
+  Darwin) open "$ABS" ;;
+  Linux)
+    if grep -qi microsoft /proc/version 2>/dev/null && command -v wslview >/dev/null 2>&1; then wslview "$ABS";
+    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$ABS";
+    else echo "open manually: file://$ABS"; fi ;;
+  *)  command -v start >/dev/null 2>&1 && start "" "$ABS" || echo "open manually: file://$ABS" ;;
+esac
+echo "presented: file://$ABS"

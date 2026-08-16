@@ -1,0 +1,92 @@
+# Fiscal Calendar Definition
+# Created during onboarding for clients using fiscal (non-calendar-monthly) periods.
+# Referenced by config.yaml: fiscal_calendar: "{local_dir}/content/period-close/fiscal-calendar.yaml"
+#
+# Usage: Copy this template, fill in all periods for the fiscal year.
+# The period resolver looks up periods by 'id' field (e.g., "2026-P01").
+# Dates MUST be quoted strings ("YYYY-MM-DD") to prevent YAML date parsing.
+
+fiscal_year: 2026
+calendar_type: "13-period"        # "13-period" (uniform 4-week) or "4-4-5" (quarterly variant)
+week_start_day: "sunday"          # "sunday" or "monday"
+fiscal_year_start: "2026-01-04"
+fiscal_year_end: "2027-01-02"
+
+periods:
+  - id: "2026-P01"
+    period: 1
+    start_date: "2026-01-04"
+    end_date: "2026-01-31"
+    weeks: [1, 2, 3, 4]
+
+  - id: "2026-P02"
+    period: 2
+    start_date: "2026-02-01"
+    end_date: "2026-02-28"
+    weeks: [5, 6, 7, 8]
+
+  - id: "2026-P03"
+    period: 3
+    start_date: "2026-03-01"
+    end_date: "2026-03-28"
+    weeks: [9, 10, 11, 12]
+
+  - id: "2026-P04"
+    period: 4
+    start_date: "2026-03-29"
+    end_date: "2026-04-25"
+    weeks: [13, 14, 15, 16]
+
+  - id: "2026-P05"
+    period: 5
+    start_date: "2026-04-26"
+    end_date: "2026-05-23"
+    weeks: [17, 18, 19, 20]
+
+  - id: "2026-P06"
+    period: 6
+    start_date: "2026-05-24"
+    end_date: "2026-06-20"
+    weeks: [21, 22, 23, 24]
+
+  - id: "2026-P07"
+    period: 7
+    start_date: "2026-06-21"
+    end_date: "2026-07-18"
+    weeks: [25, 26, 27, 28]
+
+  - id: "2026-P08"
+    period: 8
+    start_date: "2026-07-19"
+    end_date: "2026-08-15"
+    weeks: [29, 30, 31, 32]
+
+  - id: "2026-P09"
+    period: 9
+    start_date: "2026-08-16"
+    end_date: "2026-09-12"
+    weeks: [33, 34, 35, 36]
+
+  - id: "2026-P10"
+    period: 10
+    start_date: "2026-09-13"
+    end_date: "2026-10-10"
+    weeks: [37, 38, 39, 40]
+
+  - id: "2026-P11"
+    period: 11
+    start_date: "2026-10-11"
+    end_date: "2026-11-07"
+    weeks: [41, 42, 43, 44]
+
+  - id: "2026-P12"
+    period: 12
+    start_date: "2026-11-08"
+    end_date: "2026-12-05"
+    weeks: [45, 46, 47, 48]
+
+  - id: "2026-P13"
+    period: 13
+    start_date: "2026-12-06"
+    end_date: "2027-01-02"
+    weeks: [49, 50, 51, 52]
