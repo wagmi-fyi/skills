@@ -158,7 +158,7 @@ uv pip install --python .venv/bin/python -r ~/.claude/skills/bookkeeping/require
 
 `requirements.txt` is grouped **core vs. adapter** — pure-core (ingest → categorize → reconcile → SQLite staging) needs only `pyyaml`; the SoR/feed adapters (QBO, Stripe, Excel) each add their own. The full file is the safe default; a minimal or non-QBO deployment installs Core + only the adapter blocks it uses.
 
-The QBO block is a **superset tie to the `qbo` skill's deps**: the QBO adapters re-export `qbo_client` from `~/.claude/skills/qbo/scripts` at runtime (`adapters/qbo/_shared/client.py`). **The `qbo` skill is a hard dependency of every QBO adapter here** — without it installed at that path, `adapters/qbo/_shared/client.py` raises on import and the whole QBO publish path is unavailable. Install it before using QuickBooks as the system of record.
+The QBO block is a **superset tie to the `qbo` skill's deps**: the QBO adapters re-export `qbo_client` from the `qbo` skill at runtime (`adapters/qbo/_shared/client.py`). **The `qbo` skill is a hard dependency of every QBO adapter here.** The adapter finds its `scripts/` directory three ways, first one that exists winning: `QBO_SKILL_SCRIPTS` if set, then `qbo` installed beside this skill, then `~/.claude/skills/qbo/scripts`. Install `qbo` in one of them before using QuickBooks as the system of record. With none of them present the import raises, naming every path it tried, and the whole QBO publish path is unavailable.
 
 **Install the package names, not the import names.** The OAuth client imports as `intuitlib` but ships on PyPI as **`intuit-oauth`** — `pip install intuitlib` grabs the wrong project. `requirements.txt` carries the correct mapping; install from it rather than by hand.
 
