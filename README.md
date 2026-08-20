@@ -24,6 +24,29 @@ where it applies. The rest expect an agent harness that can read a skill and run
 
 ## Install
 
+On Claude Code, the plugin below installs all four skills in one command and keeps them current.
+Any other agent copies the directories in by hand.
+
+### As a Claude Code plugin
+
+```
+/plugin marketplace add wagmi-fyi/skills
+/plugin install wagmi-skills@wagmi
+```
+
+Restart Claude Code afterwards. A plugin puts its skills under its own name, so `bookkeeping`
+arrives as `wagmi-skills:bookkeeping`. Describe the work you want and the right one fires on its
+own, or name it that way to ask for it directly.
+
+All four install together. `bookkeeping` finds `qbo` beside it that way, which is what its
+QuickBooks adapters need.
+
+Run `/plugin update wagmi-skills` to take a later version. The version is the commit this
+repository is on, so an update gives you whatever the most recent publish put here. Run
+`/plugin uninstall wagmi-skills` to remove them.
+
+### By hand, on any agent
+
 A skill is a directory holding a `SKILL.md`. Put the directory where your agent looks for skills,
 either as a copy or as a symlink:
 
