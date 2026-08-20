@@ -34,7 +34,9 @@ Any other agent copies the directories in by hand.
 /plugin install wagmi-skills@wagmi
 ```
 
-Restart Claude Code afterwards, then ask for a skill by name.
+Restart Claude Code afterwards. A plugin puts its skills under its own name, so `bookkeeping`
+arrives as `wagmi-skills:bookkeeping`. Describe the work you want and the right one fires on its
+own, or name it that way to ask for it directly.
 
 All four install together. `bookkeeping` finds `qbo` beside it that way, which is what its
 QuickBooks adapters need.
