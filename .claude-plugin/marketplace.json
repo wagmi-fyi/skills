@@ -1,0 +1,23 @@
+{
+  "name": "wagmi",
+  "owner": {
+    "name": "WAGMI",
+    "url": "https://wagmi.fyi"
+  },
+  "description": "Agent skills published by WAGMI.",
+  "plugins": [
+    {
+      "name": "wagmi-skills",
+      "source": "./",
+      "description": "Bookkeeping, QuickBooks Online, skill building and multi-session orchestration. The skills WAGMI runs.",
+      "author": {
+        "name": "WAGMI",
+        "url": "https://wagmi.fyi"
+      },
+      "homepage": "https://wagmi.fyi",
+      "repository": "https://github.com/wagmi-fyi/skills",
+      "license": "Apache-2.0",
+      "keywords": ["bookkeeping", "accounting", "quickbooks", "skills", "orchestration"]
+    }
+  ]
+}
