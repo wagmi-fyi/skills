@@ -19,7 +19,10 @@ shared_bus: ""
 # Which substrate runbook describes this machine: one of reference/substrates/<name>.md.
 # It decides how a delegate is started, addressed, watched, woken and retired. A run
 # records its own substrate in the workpaper, and that record wins over this default.
-substrate: "claude"
+# Leave BLANK to have detection answer, which is what it ships as: `spawn --check`
+# then names what it found and asks you to record it, and refuses when nothing here
+# can spawn at all. Declare one only when detection is wrong or you want it pinned.
+substrate: ""
 
 # Who starts a delegate session:
 #   "auto-spawn" — the orchestrator runs scripts/spawn, which uses the substrate's branch
@@ -33,5 +36,7 @@ delegate_skip_permissions: false
 
 # Model for spawned delegate sessions. Delegates run charters written for a specific
 # model's dispositions; without this, a spawn inherits whatever default the human last
-# saved for their own sessions. Blank = inherit.
-delegate_model: "opus"
+# saved for their own sessions. Blank = inherit, which is what it ships as. Set it once
+# you know which model your charters are written for, because a charter that assumes a
+# model's dispositions and gets another one fails quietly rather than loudly.
+delegate_model: ""
