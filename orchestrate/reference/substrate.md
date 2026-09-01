@@ -1,37 +1,54 @@
-# Substrate — tmux foundation, spawn, push-wake, notify
+# Substrate — the acts a run needs, and the runbook that answers them
 
-The orchestration runs on a **tmux** foundation. tmux is what makes two things possible that native Claude Code can't:
-1. **Human-reachable spawned sessions** — an orchestrator opens a delegate as a **visible pane** you can switch into and drive. Native subagents/Workflow are headless + hidden → they fail the "all real work is reachable" rule.
-2. **Push-wake** — an external event (mail landing) pokes a session's stdin the instant there's work, with **zero idle token burn** (a native file-watcher waits, not a polling model turn).
+The method needs a handful of physical acts: start a session, address it, see what it is doing, wake it, reach the human, retire it. **Nothing in the core says how those are performed.** Each is named as an act here and answered by one runbook under `reference/substrates/`, chosen once per run.
 
-You can run tmux **inside a VS Code terminal tab** — your sessions become tmux panes in that tab (navigate `Ctrl-b` + numbers) instead of native VS Code tabs.
+| Act | What the core needs of it | Where the core calls for it |
+|---|---|---|
+| **Spawn a delegate** | a fresh session, human-reachable, running the `delegate` operation | `run.md` |
+| **Address a peer** | a name that reaches a live session | `run.md`, `resume.md` |
+| **Read the board** | who is working, who is blocked, who finished, who is gone | `run.md`, `resume.md` |
+| **Wake a peer** | make a session look at its inbox — to signal it mid-unit, and to carry the wake leg of a report | `run.md`, `delegate.md` |
+| **Reach the human** | the live channel an escalation travels on | `human-in-the-loop.md`, `decision-briefs.md` |
+| **Retire a delegate** | what happens to a session whose unit closed | `run.md` |
 
-## Hosting
-Start tmux (`tmux new -s orch`) or `tmux attach`. Run each Claude Code session in a pane. Panes survive the terminal closing (not machine sleep). Each session registers: `bus init <handle> --pane "$TMUX_PANE"`.
+## The bus is the same on every substrate
 
-## Spawn (orchestrator → visible delegate)
-`scripts/spawn <handle> [initial-instruction]` opens a new **named, visible** tmux window running `claude`, seeded to run the `delegate` operation and pick up its assignment from the bus. The orchestrator `bus send`s the assignment **before** spawning. The pane is a peer session — watch it, take it over, or let it report back. (Honor `spawn_mode`: `auto-spawn` ⇒ orchestrator spawns; `manual` ⇒ tell the human to launch.)
+Handles, directed inboxes, the cursor, pointers, leases and the `human` ledger are files (`session-bus.md`). They work identically wherever the sessions live, and they outlive every session. **When a substrate signal and the bus disagree about what happened, the bus is the record** — a session's screen, its status field and its process are all evidence about the session, not about the work.
 
-## Push-wake
-`scripts/bus-watch.sh` (`brew install fswatch` / `apt install fswatch` first) watches `inbox/` and, on a new message, `tmux send-keys` the recipient's pane an instruction to check the bus. It is **one machine-level daemon serving every orchestration on the bus** — a single instance (the pidfile guard refuses a second).
+## Selection — detect first, once, at activation
 
-Manage it as the long-lived process it is, rather than re-improvising:
-- `bus-watch.sh` — run in the foreground (`run.md` backgrounds this with `nohup … &`).
-- `bus-watch.sh status` — is one running? (use for the "already up?" check)
-- `bus-watch.sh stop` / `restart` — stop, or stop + relaunch detached. **Run `restart` after editing the script** — a running watcher holds the old code until bounced. (Both target the pidfile pid + its children, never a command-pattern, so they can't self-kill the caller.)
+1. **Detect what this host can actually run.** `scripts/spawn --check` proves each substrate's mechanism is present — a multiplexer session for panes, the background-agent capability for the harness — and prints what it found, which settings are in force, and where each came from.
+2. **A deliberate declaration overrides detection**: the workpaper's **Standing Postures → Effective config** first, then `config.yaml: substrate`, then the settings seam below. `--check` refuses when the declared substrate's mechanism is absent.
+3. **Record the result in the workpaper** before the first spawn.
 
-- **Poke-then-verify — a sent poke is not a delivered poke.** A `send-keys` poke to a Claude Code pane can strand (bracketed paste eats the Enter) or sit queued without submitting. Send the text and the Enter as **separate** `send-keys` calls, then `capture-pane` and confirm the recipient actually started processing (a spinner / advancing token counter — not just your text sitting in its input line). Applies equally to the watcher's automatic pokes (verify the important ones) and to any manual nudge.
-- **Push replaces polling** for the message-wake job. Use a `/loop` only as (a) a slow failsafe for a missed poke, or (b) genuinely time-triggered work (not message-driven).
+A charter is written for a substrate whether or not its author noticed: it tells the delegate how to register, where the human will find it, and how to report. A run that discovers its substrate mid-flight has already sent the wrong one.
 
-## Notify (crossroads / human-only escalation)
-`scripts/notify "<title>" "<msg>"` raises a desktop notification + terminal bell, cross-platform. Used when an agent hits a design crossroads or a human-only step (see `human-in-the-loop.md`) — paired with **pausing the unit**.
+## A substrate mismatch is a wall
 
-## Per-OS matrix
-| Capability | macOS | Linux | Windows |
-|---|---|---|---|
-| Bus (files) | ✅ | ✅ | ✅ (portable lock shim) |
-| tmux spawn/push | ✅ | ✅ | via **WSL**; native: no tmux → open panes with Windows Terminal `wt`, **manual nudge** (no send-keys) |
-| notify | `osascript` | `notify-send` | PowerShell toast / bell fallback |
-| fswatch push | `brew install fswatch` | `apt install fswatch` | WSL only |
+A declared substrate the host cannot run is not an obstacle to work around. The run stops and reports it. Pointing a spawn at somebody else's session, passing the missing mechanism in by flag, or recording a deviation and proceeding are the compliance patch `method.md` forbids.
 
-On native Windows without WSL: the **bus + method + manual nudge** work; **auto-spawn + push degrade** to the human launching panes and nudging. Note this in the project workpaper if it applies.
+**The harness's in-process subagent tool is not a substrate.** It is not human-reachable and never appears in the session listing, so no unit that mutates state or produces a deliverable runs there, whatever the substrate situation is. Read-only research may (`method.md`). Where nothing can spawn, `spawn_mode: manual` is the way through: the human opens the session and it becomes addressable once it lists. Reachability is read from the listing, never asserted.
+
+## The settings seam
+
+Every setting resolves in one order: **the environment, then the machine conf, then the shipped `config.yaml`.** The environment names each setting as its `config.yaml` key uppercased and prefixed — `ORCHESTRATE_SUBSTRATE`, `ORCHESTRATE_DELEGATE_MODEL` — and the conf file uses those same names, one `KEY="value"` per line. `$ORCHESTRATE_CONF` names the conf file; `scripts/spawn --check` reports its path and whether it was found.
+
+The seam exists because the shipped file is the layer a local ruling **cannot** be written into: under a managed install the skill folder is root-owned, and an edit there is either refused or overwritten by the next update. A ruling written where the skill cannot read it is silently lost, and a delegate spawned on an unread `delegate_model` runs a different model than its charter was written for.
+
+## Runbooks
+
+| Substrate | File | Use when |
+|---|---|---|
+| `claude` | `reference/substrates/claude.md` | delegates are background agents; the human reaches them through the harness's agent view |
+| `tmux` | `reference/substrates/tmux.md` | sessions are terminal panes on one machine. **Requires the orchestrator itself to be running inside tmux** — a session that is not cannot open a pane, and no flag substitutes |
+| `codex` | `reference/substrates/codex.md` | unwritten. The stub says what writing it requires |
+
+## What a runbook has to answer
+
+The six acts, plus three questions that decide whether a run is safe on it:
+
+- **How does the orchestrator learn that a delegate blocked?** A delegate parked on a question it cannot ask is the failure this method is most exposed to, because it looks exactly like a delegate that finished.
+- **What stands a wake path while nobody is watching?** The mechanism that serves an attended run is often a person, and it stops when they walk away. Name the recurring one, and name what kills it.
+- **What fails silently here?** Name every path that reports success while reaching nobody. A tool that exits 0 into the void is worse than an absent one, and the run has to know which ones those are before its first escalation.
+
+A runbook missing any of the three is incomplete, and a run on it carries that gap in its workpaper.

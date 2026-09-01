@@ -7,8 +7,10 @@ hold, how it checks its own work. These are the ones we run ourselves. Each one 
 work rather than a specification, and each one keeps growing that way.
 
 Parts of this depend on Claude Code. `orchestrate` starts its delegate sessions with the `claude`
-CLI inside tmux, so it needs both to run the way it is written. The skill descriptions say so
-where it applies. The rest expect an agent harness that can read a skill and run a script.
+CLI, and it carries one runbook per way of running them: background agents, or panes in tmux. It
+says what each way needs and refuses when the mechanism is absent, so you find out before a run
+rather than during one. The skill descriptions say where a dependency applies. The rest expect an
+agent harness that can read a skill and run a script.
 
 ## What's here
 

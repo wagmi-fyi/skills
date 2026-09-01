@@ -17,12 +17,13 @@ The discipline that makes everything downstream cheap. **North-star prompt: *"el
 - Break the work into **units** — each a coherent, independently-delegable chunk with one **gate** (how you'll verify it, with evidence) and a **lane** (disjoint writes: worktree/branch, tables, deploy slot).
 - Order them into a **dependency graph** + **waves** (what runs in parallel). Name the **serialization point** — the single commitment step (deploy/publish/system-of-record write) that runs one-at-a-time.
 - Flag **human-only** units (logins/secrets/sign-offs) to fire early.
-- Where a cut is a genuine design crossroads (a boundary that could go two ways, a contract two units share), **notify + pause + bring the human in** (`human-in-the-loop.md`). Routine cuts: just make them.
+- Where a cut is a genuine design crossroads (a boundary that could go two ways, a contract two units share), **pause + bring the human in** (`human-in-the-loop.md`). Routine cuts: just make them.
 
 ## 3. Write the artifacts (from templates)
 > **Composing with a domain skill?** If a host skill already owns the workpaper (e.g. `/bookkeeping`'s period-close workpaper), **defer** — use it as the live surface; write `plan.md` only if it adds run-specific structure the host doesn't encode. Don't duplicate the workpaper.
 - `plan.md` from `templates/plan.md` — the durable graph + gates + lanes + serialization point + **project-specific method notes** (domain specifics — your infra/deploy/tooling conventions, etc. — live HERE, not in the skill).
-- `workpaper.md` from `templates/workpaper.md` — STATUS box, the work board (one row per unit), open human-only asks, an empty journal. Front-matter records `output_dir`, `project`, and the `bus` handles.
+- `workpaper.md` from `templates/workpaper.md` — STATUS box, the work board (one row per unit), open human-only asks, an empty journal. Front-matter records `output_dir`, `project`, and the `bus` handles. **Record the substrate and the live reach to the human here** (`reference/substrate.md`): every later operation reads them from the workpaper, and a charter written before they are settled is written for a machine nobody checked.
+- `action-items.md` beside it — the human's queue, scaffolded empty. The convention lives in `human-in-the-loop.md`; it is the ONLY surface for asks of the human.
 
 ## 4. Hand off to `run`
 Confirm the graph with the human, fire early human-only asks, then proceed to `operations/run.md`.
