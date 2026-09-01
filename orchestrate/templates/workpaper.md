@@ -20,8 +20,10 @@ created: {{date}}
 ## ▶ Standing Postures — re-assert these FIRST on resume
 > Directives a compaction silently resets. Re-affirm before any action; honor **Effective config** over `config.yaml` defaults. `checkpoint` refreshes this block before you compact.
 
+**Substrate:** {{name}} — runbook `reference/substrates/{{name}}.md`; the live reach to the human is {{what actually arrives on this host}}.
+
 **Effective config** — deltas from `config.yaml`, each with a why (empty ⇒ running skill defaults):
-- {{none — skill defaults}}   <!-- e.g. `close_mode: auto` — auto-reap verified panes this run -->
+- {{none — skill defaults}}   <!-- e.g. `spawn_mode: manual` — the human opens each delegate on this run -->
 
 **Behavioral postures** — run-specific operating directives:
 - {{none yet}}   <!-- e.g. "Deploy only from the proven chart, base off the live tip, verify functionally not just the diff" -->

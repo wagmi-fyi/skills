@@ -11,21 +11,93 @@ Design properties (see reference/session-bus.md + reference/substrate.md):
   - Pointers, not blobs: put a big prompt/report in prompts/ and send a --ref;
     inbox lines stay tiny, so a poke/check costs almost nothing.
   - Append-only log.jsonl mirrors every message for audit / cross-verification.
+  - Shared-safe: a bus whose root is setgid and group-writable is one several
+    unix accounts use. The root's own mode decides the mode of everything
+    created under it, so a member's umask cannot lock their peers out; a handle
+    records the account that registered it and is REFUSED to a second claimant;
+    every message records the account the send ran as, beside the `from` handle
+    the sender typed.
 
-Invoke:  ~/.claude/skills/orchestrate/scripts/bus <cmd> ...
+Invoke:  <install-dir>/bus <cmd> ... on a machine that installs this file once
+         for everybody on it. The orchestrate skill reaches the same program
+         through a symlink at ~/.claude/skills/orchestrate/scripts/bus. Neither
+         is on PATH.
 """
-import sys, os, json, uuid, argparse, time, re
+import sys, os, json, uuid, argparse, time, re, pwd
 from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(os.environ.get("SESSION_BUS_DIR", str(Path.home() / ".claude" / "session-bus")))
 INBOX, PROMPTS, CURSORS, PROCESSED = ROOT / "inbox", ROOT / "prompts", ROOT / "cursors", ROOT / "processed"
 LOG, HANDLES, LOCKS = ROOT / "log.jsonl", ROOT / "handles.json", ROOT / "locks"
+HANDLES_LOCK = ROOT / ".handles.lock"
+
+
+def me():
+    """The unix account this process runs as. On a shared bus it is the only
+    thing that says whose registration a handle is."""
+    try:
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except Exception:
+        return os.environ.get("USER", "") or str(os.geteuid())
+
+
+# ── modes: the bus root decides what everything under it may be ──
+# A bus with more than one unix user on it is only usable if every member can
+# append to every file. Depending on the caller's umask for that does not work:
+# a member whose umask is 022 writes 0644 files, and the next member's send
+# fails on a bus that was correct until they touched it. So the root's own
+# permission bits are read once and applied to everything created beneath it.
+# A personal bus keeps its private mode by exactly the same rule.
+DEFAULT_DIR_MODE = 0o700
+
+
+def root_dir_mode():
+    try:
+        return ROOT.stat().st_mode & 0o7777
+    except OSError:
+        return DEFAULT_DIR_MODE
+
+
+def file_mode_for(dir_mode):
+    return dir_mode & 0o666          # 02770 -> 0660,  0700 -> 0600
+
+
+def is_shared_bus():
+    """A bus more than one unix account can write. Setgid plus group-write is
+    what makes that true, and it is what a machine-wide install sets on a
+    shared bus, so the mode is read rather than a flag being trusted."""
+    m = root_dir_mode()
+    return bool(m & 0o2000) and bool(m & 0o070)
+
+
+def chmod_quiet(path, mode):
+    """Set a mode, and carry on if it cannot be set.
+
+    The ordinary reason it fails is that the file belongs to another member,
+    which means it already carries the mode that member's own run gave it.
+    Only the owner may chmod, and the owner already did."""
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
 
 
 def ensure_dirs():
-    for d in (INBOX, PROMPTS, CURSORS, PROCESSED):
-        d.mkdir(parents=True, exist_ok=True)
+    dmode = root_dir_mode()
+    for d in (ROOT, INBOX, PROMPTS, CURSORS, PROCESSED):
+        if not d.exists():
+            d.mkdir(parents=True, exist_ok=True)
+            chmod_quiet(d, dmode)       # mkdir's mode is filtered by umask; this is not
+
+
+def touch_shared(path):
+    """Create a file if absent and give it the mode the bus root implies."""
+    existed = path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+    if not existed:
+        chmod_quiet(path, file_mode_for(root_dir_mode()))
 
 
 def now_iso():
@@ -54,6 +126,7 @@ except ImportError:                     # Windows: best-effort lockfile (no fcnt
 
 def append_line(path, obj):
     path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.exists()
     with open(path, "a", encoding="utf-8") as f:
         _lock(f)                                # atomic append across concurrent senders
         try:
@@ -61,6 +134,8 @@ def append_line(path, obj):
             f.flush(); os.fsync(f.fileno())
         finally:
             _unlock(f)
+    if not existed:
+        chmod_quiet(path, file_mode_for(root_dir_mode()))
 
 
 def lines_of(path):
@@ -75,9 +150,35 @@ def read_handles():
 
 
 def write_handles(d):
-    tmp = HANDLES.with_suffix(".json.tmp")
+    # The temp name carries the pid. Two members registering in the same second
+    # would otherwise stage through one path and one of them would read the
+    # other's half-written file. Hold handles_lock() across read + write.
+    tmp = HANDLES.with_name(f".handles.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(d, indent=2))
+    chmod_quiet(tmp, file_mode_for(root_dir_mode()))
     tmp.replace(HANDLES)
+
+
+class handles_lock:
+    """Serializes the read-modify-write of handles.json across every session on
+    the bus. Without it a registration is a lost update: two sessions read the
+    same board, each writes its own entry onto it, and the first one vanishes.
+    A vanished registration is a session that believes it joined and cannot be
+    addressed, which is the exact failure the auto-join exists to remove."""
+
+    def __enter__(self):
+        ensure_dirs()
+        touch_shared(HANDLES_LOCK)
+        self.f = open(HANDLES_LOCK, "r+", encoding="utf-8")
+        _lock(self.f)
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            _unlock(self.f)
+        finally:
+            self.f.close()
+        return False
 
 
 def cursor_of(handle):
@@ -89,11 +190,22 @@ def cursor_of(handle):
 
 
 def set_cursor(handle, n):
-    (CURSORS / f"{handle}.cursor").write_text(str(n))
+    c = CURSORS / f"{handle}.cursor"
+    existed = c.exists()
+    c.write_text(str(n))
+    if not existed:
+        chmod_quiet(c, file_mode_for(root_dir_mode()))
 
 
 def fmt(m):
-    out = f"[{m.get('ts','')}] {m.get('from','?')} -> {m.get('to','?')}  ({m.get('id','')})\n"
+    sender = m.get("sender", "")
+    frm = m.get("from", "?")
+    # Shown only when it adds something: a handle already qualified with the
+    # sending account repeats itself, and a line nobody reads is a line that
+    # hides the case where the two disagree.
+    if sender and not frm.startswith(f"{sender}-") and frm != sender:
+        frm = f"{frm} [{sender}]"
+    out = f"[{m.get('ts','')}] {frm} -> {m.get('to','?')}  ({m.get('id','')})\n"
     out += f"  subject: {m.get('subject','')}\n"
     if m.get("body"):
         out += f"  body: {m['body']}\n"
@@ -102,43 +214,188 @@ def fmt(m):
     return out
 
 
+def reject_flag_handle(handle):
+    """A handle beginning with a dash is a flag that reached the wrong argument.
+
+    Proven on this bus: a caller passed a flag the installed script did not
+    have, argparse could not claim it, and it registered as a handle and
+    started a live session under that name. Registration creates durable
+    state, so the refusal belongs here rather than downstream."""
+    if handle.startswith("-"):
+        print(f"REFUSED: '{handle}' begins with a dash, so it is a flag, not a handle.")
+        print(f"  Nothing was registered. This is what a flag the installed version "
+              f"does not have looks like when it reaches the handle argument. Check "
+              f"the version you are calling before renaming anything.")
+        sys.exit(1)
+
+
+def session_identity():
+    """The session this process is running inside, as it identifies itself.
+
+    Read from the environment for the same reason the pane is: the caller is the
+    session, so no lookup is more authoritative than what it was handed. The
+    names are a harness's, the way TMUX_PANE is a multiplexer's; a harness that
+    sets neither yields None and the handle simply carries no session.
+    """
+    pid = os.environ.get("CLAUDE_PID") or ""
+    return {
+        "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+        "pid": int(pid) if pid.isdigit() else None,
+    }
+
+
+def pid_alive(pid):
+    """True, False, or None when there is no pid to ask about.
+
+    A permission error proves the process exists and belongs to somebody else,
+    which on a shared bus is the normal case and is not an absence.
+    """
+    if not pid:
+        return None
+    if os.path.isdir("/proc/%d" % pid):
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def session_registry_dir():
+    """Where the harness records the sessions it is running right now.
+
+    Read for the reason session_identity() reads the environment: this is the
+    harness's own record of itself, and nothing derived beats it. A harness
+    that keeps no such directory yields nothing here, and the caller falls
+    back to the process the handle registered with.
+    """
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+    return Path(base) / "sessions"
+
+
+def live_session(session_id):
+    """The harness's current record for a session id, or None if it is gone.
+
+    A session keeps its id across a resume and comes back under a new process.
+    So the pid a handle registered with goes stale while the session it names
+    is still there and still working. The id is the half that holds, and this
+    is the lookup that turns it back into a running process and the name the
+    listing prints for it.
+    """
+    if not session_id:
+        return None
+    try:
+        files = sorted(session_registry_dir().glob("*.json"))
+    except OSError:
+        return None
+    for f in files:
+        try:
+            rec = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if rec.get("sessionId") == session_id and pid_alive(rec.get("pid")):
+            return rec
+    return None
+
+
 def cmd_init(a):
     ensure_dirs()
-    (INBOX / f"{a.handle}.jsonl").touch(exist_ok=True)
+    reject_flag_handle(a.handle)
+    who = me()
+    pane = a.pane or os.environ.get("TMUX_PANE", "")
+    if pane == "-":
+        pane = ""       # "-" is how a caller SAYS "no pane"; it is not a pane id, so it
+                        # must not claim one, and must not evict another handle's claim.
+
+    with handles_lock():
+        h = read_handles()
+        prior = h.get(a.handle)
+
+        # ── A HANDLE IS REFUSED TO ITS SECOND CLAIMANT, NEVER TAKEN FROM ITS FIRST ──
+        # On a shared bus the handle space is shared by people, not just by
+        # sessions, so a collision is somebody else's session, live, addressed by
+        # that name. Overwriting the registration would silently redirect every
+        # message meant for them into this session's inbox, and neither side
+        # would see anything go wrong. The owner of record is the unix account
+        # that registered it. A member re-registering their OWN handle is not a
+        # collision: that is a resume, and the session-start hook fires again on
+        # every resume by design.
+        if prior is not None:
+            owner = prior.get("owner", "")
+            if owner and owner != who:
+                print(f"REFUSED: handle '{a.handle}' is registered to unix user '{owner}' "
+                      f"(since {prior.get('started', '?')}), and you are '{who}'.")
+                print(f"  Nothing was changed. Pick a handle of your own — the convention on a "
+                      f"shared bus is '{who}-<something>' — or ask {owner} to release theirs.")
+                sys.exit(1)
+
+        # THE PANE IS EVICTED, THE HANDLE IS NOT, and the two are different
+        # claims. A pane hosts exactly one session, so a second handle claiming
+        # it means the first claim is wrong; it is usually a dead handle whose
+        # pane id got recycled. The eviction is not verified as dead, so it is
+        # reported as a warning rather than announced as cleanup. That handle's
+        # inbox and log are untouched — it stops being a poke target, nothing more.
+        evicted = []
+        if pane:
+            for other, om in h.items():
+                if other != a.handle and om.get("pane") == pane:
+                    om["pane"] = ""
+                    evicted.append(other)
+
+        # ── A HANDLE THAT DOES NOT CARRY ITS SESSION IS A NAME WITH NOTHING
+        # BEHIND IT. `bus init` runs inside the session it is registering, and
+        # that is the only moment the session's own identity is free: it is in
+        # the environment. Derived later it costs a transcript search, and a
+        # wrong answer sends a wake into somebody else's session, where both
+        # legs still look delivered. Absent values stay absent rather than
+        # guessed. A handle registered by hand, or under a harness that
+        # exports neither, records nothing and reads as unknown, never as gone.
+        ident = session_identity()
+        # The send address lives here for the same reason the session identity
+        # does: the registering session is the one place the value is known.
+        # A re-register without --address keeps the prior value.
+        h[a.handle] = {
+            "pane": pane,
+            "owner": who,
+            "cwd": os.getcwd(),
+            "role": a.role or "",
+            "started": now_iso(),
+            "session": ident["session"],
+            "pid": ident["pid"],
+            "address": a.address or (prior or {}).get("address", ""),
+        }
+        write_handles(h)
+
+    touch_shared(INBOX / f"{a.handle}.jsonl")
     if not (CURSORS / f"{a.handle}.cursor").exists():
         set_cursor(a.handle, 0)
-    pane = a.pane or os.environ.get("TMUX_PANE", "")
-    h = read_handles()
-    # A tmux pane hosts exactly one session — last registrant wins. Any OTHER handle
-    # still claiming this pane is a stale registration (e.g. a dead handle whose pane
-    # id got recycled after a server restart); drop its pane so push-wake can't mis-poke
-    # it. Its inbox + log stay intact (reversible) — it just stops being a poke target.
-    # This makes post-crash pane collisions self-heal at registration, with no gc sweep.
-    evicted = []
-    if pane:
-        for other, om in h.items():
-            if other != a.handle and om.get("pane") == pane:
-                om["pane"] = ""
-                evicted.append(other)
-    h[a.handle] = {
-        "pane": pane,
-        "cwd": os.getcwd(),
-        "role": a.role or "",
-        "started": now_iso(),
-    }
-    write_handles(h)
+
     total = len(lines_of(INBOX / f"{a.handle}.jsonl"))
-    shown = pane or "(none -- not in tmux; push wake unavailable)"
-    print(f"handle '{a.handle}' registered.  pane={shown}")
+    shown = pane or "- (no pane; reach this session through the agent listing)"
+    verb = "re-registered" if prior is not None else "registered"
+    print(f"handle '{a.handle}' {verb} to {who}.  pane={shown}")
     if evicted:
-        print(f"  cleared stale claim on pane {pane} from: {', '.join(evicted)}")
+        print(f"  WARNING: took pane {pane} from: {', '.join(evicted)}. That handle is now "
+              f"unreachable by pane. If it is live, re-register it from its own pane.")
+    # The naming convention is a warning and not a refusal. `human` is a shared
+    # ledger by design, and a run's own orchestrator handle is named by its
+    # charter; refusing those would break the bus to enforce a convention that
+    # exists to keep members from colliding in the first place.
+    if is_shared_bus() and not a.handle.startswith(f"{who}-") and a.handle != "human":
+        print(f"  note: '{a.handle}' is not qualified with your unix name on a shared bus. "
+              f"'{who}-{a.handle}' cannot collide with another member's.")
     print(f"inbox: {total - cursor_of(a.handle)} unread / {total} total.")
 
 
 def cmd_send(a):
     ensure_dirs()
+    # `from` is what the sender TYPED. `sender` is the unix account the send ran
+    # as, which the sender cannot choose. On a shared bus those are two different
+    # facts and only the second one is evidence, so both are recorded.
     m = {"id": uuid.uuid4().hex[:8], "ts": now_iso(),
-         "from": a.frm, "to": a.to, "subject": a.subject, "body": a.body or ""}
+         "from": a.frm, "sender": me(), "to": a.to, "subject": a.subject, "body": a.body or ""}
     if a.ref:
         m["ref"] = a.ref
     append_line(INBOX / f"{a.to}.jsonl", m)
@@ -192,14 +449,107 @@ def cmd_handles(a):
     if not h:
         print("no handles registered")
         return
+    shared = is_shared_bus()
     for k, v in h.items():
         total = len(lines_of(INBOX / f"{k}.jsonl"))
-        print(f"{k:18}  unread={total - cursor_of(k):<3} total={total:<3} "
-              f"pane={(v.get('pane') or '-'):11} role={v.get('role','')}")
+        owner = f"owner={v.get('owner') or '?':10} " if shared else ""
+        # A handle outlives its session and nothing in the bus notices, so the
+        # unread count on a dead handle is mail that will never be read by
+        # anyone. `?` is a handle registered before it recorded a session, or by
+        # a caller whose harness names itself differently; it is not a verdict.
+        live = {True: "live", False: "gone", None: "?"}[pid_alive(v.get("pid"))]
+        print(f"{k:24}  {live:4} unread={total - cursor_of(k):<3} total={total:<3} "
+              f"{owner}pane={(v.get('pane') or '-'):11} role={v.get('role','')}")
 
 
 def cmd_pane(a):   # used by the push watcher to find a handle's tmux pane
     print(read_handles().get(a.handle, {}).get("pane", ""))
+
+
+def cmd_whois(a):
+    """The session behind a handle, so a wake can be aimed rather than guessed."""
+    v = read_handles().get(a.handle)
+    if v is None:
+        print(f"no handle '{a.handle}' on this bus")
+        sys.exit(1)
+    alive = pid_alive(v.get("pid"))
+    print(json.dumps({
+        "handle": a.handle,
+        "session": v.get("session"),
+        "pid": v.get("pid"),
+        "alive": alive,
+        "owner": v.get("owner"),
+        "cwd": v.get("cwd"),
+        "pane": v.get("pane") or None,
+        "role": v.get("role") or None,
+        "address": v.get("address") or None,
+        "registered": v.get("started"),
+    }, indent=2))
+    # A handle registered before it carried a session, or by a caller whose
+    # harness exports no identity, cannot be resolved to one. Say so, rather
+    # than let an empty field read as a session that ended.
+    sys.stdout.flush()
+    if alive is None:
+        print("  note: this handle carries no session identity. It was registered "
+              "before the handle recorded one, or by a caller whose harness exports "
+              "none. Re-register it from inside its session to fix it.", file=sys.stderr)
+    # 0 the session is alive, 2 it is gone, 3 nothing was recorded to ask about.
+    # Unknown is its own answer: a gate that reads it as gone retires a live handle.
+    sys.exit({True: 0, False: 2, None: 3}[alive])
+
+
+def cmd_wake(a):
+    """The address a wake goes to, resolved from what the handle recorded.
+
+    This prints an address and stops there. On a harness whose wake is a tool
+    inside a session, a command line has no way to send one, and a CLI that
+    claimed to deliver would report a wake nobody received. Printing the
+    address is the whole of what can be done honestly from here.
+
+    Exit: 0 resolved / 1 no such handle / 2 the session is gone / 3 the handle
+    records no session / 4 it is live and nothing records how to address it.
+    """
+    v = read_handles().get(a.handle)
+    if v is None:
+        print(f"no handle '{a.handle}' on this bus.", file=sys.stderr)
+        sys.exit(1)
+
+    session = v.get("session")
+    if not session:
+        # Registered before the handle carried a session, or under a harness
+        # that exports none. There is nothing to resolve, and the address the
+        # registration holds is unverifiable, so it is not offered: a wake to
+        # a stale address lands in a stranger and reads as delivered.
+        print(f"handle '{a.handle}' records no session, so nothing here can say where "
+              f"it is. Re-register it from inside its session.", file=sys.stderr)
+        sys.exit(3)
+
+    rec = live_session(session)
+    if rec is not None:
+        address = rec.get("name") or v.get("address") or ""
+        source = "the harness's live record"
+    elif not session_registry_dir().is_dir():
+        # Nothing on this harness records live sessions, so the registered
+        # process is the only liveness there is.
+        if not pid_alive(v.get("pid")):
+            print(f"the session behind '{a.handle}' is gone: process {v.get('pid')} is not "
+                  f"running and this harness records no live sessions.", file=sys.stderr)
+            sys.exit(2)
+        address = v.get("address") or ""
+        source = "the handle's own registration, whose process is still alive"
+    else:
+        print(f"the session behind '{a.handle}' is gone. It registered as {session}, and "
+              f"no session running now carries that id.", file=sys.stderr)
+        sys.exit(2)
+
+    if not address:
+        print(f"'{a.handle}' is live and nothing records what to address it as. "
+              f"Re-register it from inside its session with --address.", file=sys.stderr)
+        sys.exit(4)
+
+    print(address)
+    print(f"  from {source}. Send the wake with your harness's own peer-send tool; "
+          f"this CLI cannot deliver one.", file=sys.stderr)
 
 
 def cmd_rotate(a): # hygiene: move already-read messages out so inboxes stay small
@@ -263,9 +613,18 @@ def cmd_gc(a):
     handles = read_handles()
     held = _active_lease_holders()
     now = datetime.now().astimezone()
-    plan = []
+    who, shared = me(), is_shared_bus()
+    plan, foreign = [], 0
     for handle, meta in handles.items():
         if handle == "human" or handle in held:
+            continue
+        # ON A SHARED BUS YOU SWEEP YOUR OWN HANDLES AND NOBODY ELSE'S. The
+        # directory is group-writable, so the delete would succeed; that is
+        # exactly why the refusal has to be here. Another member's idle handle
+        # is not evidence about their session, and retiring it takes their
+        # inbox out from under a session that may be alive and quiet.
+        if shared and meta.get("owner", "") != who:
+            foreign += 1
             continue
         n = len(lines_of(INBOX / f"{handle}.jsonl"))
         if cursor_of(handle) < n:
@@ -276,12 +635,17 @@ def cmd_gc(a):
         idle_days = (now - last).total_seconds() / 86400
         if idle_days >= a.days:
             plan.append((handle, int(idle_days), n))
+    skipped = f"  ({foreign} handle(s) belong to other members and were not considered.)" if foreign else ""
     if not plan:
-        print(f"gc: nothing to retire (no fully-read handle idle > {a.days}d).")
+        print(f"gc: nothing to retire (no fully-read handle of yours idle > {a.days}d).")
+        if skipped:
+            print(skipped)
         if a.commit:
             stamp.write_text(str(time.time()))
         return
     print(f"gc: {'retiring' if a.commit else 'would retire'} {len(plan)} handle(s) — fully read, idle > {a.days}d:")
+    if skipped:
+        print(skipped)
     for handle, days, n in sorted(plan, key=lambda x: -x[1]):
         print(f"  {handle:30} idle {days:>3}d   {n} msg archived")
     if not a.commit:
@@ -298,8 +662,14 @@ def cmd_gc(a):
         cur = CURSORS / f"{handle}.cursor"
         if cur.exists():
             cur.unlink()
-        handles.pop(handle, None)
-    write_handles(handles)
+    # Re-read under the lock rather than writing back the board as it looked
+    # when the plan was made. A session that registered while this sweep was
+    # deciding is on disk now and must survive it.
+    with handles_lock():
+        live = read_handles()
+        for handle, _, _ in plan:
+            live.pop(handle, None)
+        write_handles(live)
     stamp.write_text(str(time.time()))
     print(f"\nretired {len(plan)} handle(s) → processed/.  Every message remains in log.jsonl (reversible).")
 
@@ -377,6 +747,9 @@ def main():
 
     s = sub.add_parser("init", help="register this session's handle (call once at launch)")
     s.add_argument("handle"); s.add_argument("--pane", default=""); s.add_argument("--role", default="")
+    s.add_argument("--address", default="",
+                   help="the peer-visible send address for this session (the name the "
+                        "agent listing prints). Omitted on re-register, the prior value holds.")
     s.set_defaults(func=cmd_init)
 
     s = sub.add_parser("send", help="send a message: bus send <from> <to> <subject> [body] [--ref FILE]")
@@ -398,6 +771,12 @@ def main():
 
     s = sub.add_parser("pane", help="print a handle's tmux pane (used by the push watcher)")
     s.add_argument("handle"); s.set_defaults(func=cmd_pane)
+
+    s = sub.add_parser("whois", help="the session behind a handle: id, pid, whether it is alive")
+    s.add_argument("handle"); s.set_defaults(func=cmd_whois)
+
+    s = sub.add_parser("wake", help="print the address a wake to this handle goes to (it does not send)")
+    s.add_argument("handle"); s.set_defaults(func=cmd_wake)
 
     s = sub.add_parser("rotate", help="move already-read messages out of MY inbox")
     s.add_argument("handle"); s.set_defaults(func=cmd_rotate)

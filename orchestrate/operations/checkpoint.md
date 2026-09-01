@@ -26,7 +26,7 @@ For each candidate posture:
 
 | Posture kind | Runtime home (autonomous) | Promoted home (needs OK) |
 |---|---|---|
-| Config value (e.g. `close_mode: auto`) | workpaper → **Effective config** | `config.yaml` default |
+| Config value (e.g. `spawn_mode: manual`) | workpaper → **Effective config** | `config.yaml` default |
 | General operating principle | workpaper → **Behavioral postures** | `reference/method.md` (Principles) |
 | Resume/run behavior | workpaper → **Behavioral postures** | the relevant operation (`resume.md` / `run.md`) |
 
@@ -39,10 +39,10 @@ A promoted posture is **re-expressed medium-neutrally** before it lands in a cor
 - **The workpaper keeps the case law.** Mark the runtime posture PROMOTED (don't delete it) and leave its run-specific instances — filenames, incidents, dates — where they are. Evidence stays local; the principle goes global. That trail is what keeps a promoted principle auditable back to what earned it.
 
 ## The effective-config mechanism (why the override survives)
-The workpaper's **Effective config** block is the source of truth a resumed orchestrator reads **over** `config.yaml`. That's what makes a per-run override stick: set `close_mode: auto` there and an auto-reaping run keeps auto-reaping after a compaction, even though the skill default is `manual`. Record only the *deltas* from `config.yaml`, each with a one-line why.
+The workpaper's **Effective config** block is the source of truth a resumed orchestrator reads **over** `config.yaml`. That's what makes a per-run override stick: set `spawn_mode: manual` there and a run whose delegates the human opens keeps working that way after a compaction, even though the skill default is `auto-spawn`. Record only the *deltas* from `config.yaml`, each with a one-line why.
 
 ## Write the checkpoint
-Refresh the workpaper's **Standing Postures** block (Effective config + Behavioral postures) so it is the current, complete set — add new, drop retired. It's a live snapshot, not an append log. Then add a one-line journal entry noting the checkpoint. **Also sweep the substrate before compacting:** `tmux list-panes -a` for stale delegate panes to reap and for text stranded unsubmitted in a pane's input line (a lost-Enter poke) — a checkpoint that audits only the bus board misses both. Now it's safe to compact.
+Refresh the workpaper's **Standing Postures** block (Effective config + Behavioral postures) so it is the current, complete set — add new, drop retired. It's a live snapshot, not an append log. Then add a one-line journal entry noting the checkpoint. **Also sweep the substrate before compacting:** put the board beside `bus handles` and reconcile them, per the runbook, so the postures you pin describe the sessions that actually exist. Record which in-flight delegates are live, which have exited, and where each lane stands. Now it's safe to compact.
 
 ## Condense check (keep the workpaper resume-sized)
 A checkpoint is also the natural moment to ask whether the live workpaper still fits its post-compaction job. If a single read no longer returns it whole — or closed-work history visibly outweighs live state — run `operations/condense.md` now: **after** the postures are pinned (its knowledge sweep feeds on the same filter), **before** compacting. Its invariant: archive the whole file verbatim to a dated sibling first, then cut; evidence moves, it is never summarized away.

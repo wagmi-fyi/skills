@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# orchestrate/desktop-wake — wake a bus session that nothing can poke.
+#
+# A session hosted in a desktop app, a background agent, an IDE chat or a phone
+# client holds a handle and reads its own inbox, and no external process can type
+# into it. Delivery inverts: this emits one line per new message on stdout and lets
+# the harness's own background-watch primitive carry the wake into the session.
+#
+# It is not a daemon and must not be detached — nothing would read stdout.
+#
+# Output: --check emits JSON (an agent decides from it). Watch mode emits one
+# human-readable line per message, because each line surfaces as a notification a
+# person reads.
+set -uo pipefail
+SKILL="$(cd "$(dirname "$0")/.." && pwd)"
+BUS_CLI="$SKILL/scripts/bus"
+CONF="$SKILL/config.yaml"
+MACHINE_CONF="${ORCHESTRATE_CONF:-/etc/orchestrate.conf}"
+POLL_SECS="${DESKTOP_WAKE_POLL_SECS:-15}"
+
+usage() {
+  cat <<'EOF'
+desktop-wake — wake a bus session that nothing can poke
+
+  desktop-wake --check [handle]   diagnose bus resolution, and report whether a
+                                  watcher is already running for the handle; JSON
+                                  to stdout. Run FIRST, and again to prove a watch
+                                  armed earlier is still up.
+  desktop-wake <handle>           emit one line per new message; run under the
+                                  harness's background-watch primitive, persistently
+  desktop-wake --poll <handle>    force the polling fallback (no fswatch present)
+
+Env:
+  SESSION_BUS_DIR        bus location; overrides ~/.claude/session-bus
+  DESKTOP_WAKE_POLL_SECS polling interval when fswatch is absent (default 15)
+
+Exit 2 means the bus dir is not initialized — watching it would emit nothing
+forever and read as a healthy, quiet bus.
+EOF
+}
+
+# The passwd home, independent of $HOME. A launcher that gives an app its own
+# profile by overriding HOME makes ~/.claude/session-bus resolve somewhere private,
+# so `bus` creates a SECOND, empty bus and every send goes nowhere without error.
+# Comparing the two catches that generically instead of special-casing a launcher.
+real_home() { eval echo "~$(id -un)" 2>/dev/null || printf '%s' "$HOME"; }
+resolve_bus() { printf '%s' "${SESSION_BUS_DIR:-$HOME/.claude/session-bus}"; }
+is_initialized() { [ -f "$1/handles.json" ]; }
+
+# One `key: value` (yaml) or `KEY=value` (conf) line, quotes and trailing comment
+# removed. Returns 1 when the file is unreadable or the key is unset. Same reader
+# scripts/spawn uses, so both scripts read one settings seam the same way.
+read_setting() {
+  [ -r "$1" ] || return 1
+  local raw
+  raw="$(sed -nE "s/^[[:space:]]*$2[[:space:]]*[:=][[:space:]]*(.*)$/\1/p" "$1" 2>/dev/null | head -1)"
+  [ -n "$raw" ] || return 1
+  raw="${raw%%#*}"
+  raw="$(printf '%s' "$raw" | sed -E "s/^[[:space:]]+//; s/[[:space:]]+$//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/")"
+  [ -n "$raw" ] || return 1
+  printf '%s' "$raw"
+}
+
+# Is a watcher already running for this handle? A watcher that dies leaves nothing
+# behind that says so, and from the session's side a dead watcher and a quiet bus
+# read identically. The probe must never match its own command line, which carries
+# the same handle, so every --check process is excluded by its arguments.
+watcher_pids() {
+  local handle="$1" pid args out=""
+  for pid in $(pgrep -f desktop-wake 2>/dev/null); do
+    [ "$pid" = "$$" ] && continue
+    args="$(ps -o args= -p "$pid" 2>/dev/null)"
+    case "$args" in
+      *--check*)                          continue ;;
+      *"desktop-wake"*" $handle"*)        out="$out $pid" ;;
+    esac
+  done
+  printf '%s' "${out# }"
+}
+
+# WHICH BUS IS "THE SHARED ONE" DEPENDS ON THE MACHINE. Where several people
+# work on one machine, the shared bus sits outside every home and all their
+# sessions join it. Where one person works alone, there is no such directory and
+# the bus under their home is the only one. Naming a home path as shared on a
+# machine that has a real shared bus would present a private directory as the
+# rail everybody is on, which is the confusion this check exists to end.
+#
+# The path is a deployment fact, not a property of this skill, so it comes from
+# the settings seam rather than being written into the script: the environment,
+# then the machine conf, then config.yaml. Blank means the machine has no shared
+# bus, which is the ordinary single-person case.
+shared_bus() {
+  local p="${ORCHESTRATE_SHARED_BUS:-}"
+  [ -n "$p" ] || p="$(read_setting "$MACHINE_CONF" ORCHESTRATE_SHARED_BUS)" || p=""
+  [ -n "$p" ] || p="$(read_setting "$CONF" shared_bus)" || p=""
+  if [ -n "$p" ] && [ -d "$p" ]; then printf '%s' "$p"
+  else printf '%s' "$(real_home)/.claude/session-bus"; fi
+}
+
+check() {
+  local handle="${1:-}" bus rh shared reg watchers=""
+  bus="$(resolve_bus)"; rh="$(real_home)"; shared="$(shared_bus)"
+  reg=null
+  if [ -n "$handle" ] && is_initialized "$bus"; then
+    if SESSION_BUS_DIR="$bus" "$BUS_CLI" handles 2>/dev/null | grep -q "^$handle "; then reg=true; else reg=false; fi
+  fi
+  [ -n "$handle" ] && watchers="$(watcher_pids "$handle")"
+  python3 - "$bus" "$rh" "$shared" "$handle" "$reg" "$watchers" <<'PY'
+import json, os, shutil, sys
+bus, real, shared, handle, reg, watchers = sys.argv[1:7]
+watcher_pids = watchers.split()
+init = os.path.isfile(os.path.join(bus, "handles.json"))
+overridden = os.environ.get("HOME") != real
+explicit = os.environ.get("SESSION_BUS_DIR")
+registered = {"true": True, "false": False, "null": None}[reg]
+
+# Blocking: arming now would watch the wrong place, or nothing.
+blocking = []
+if not init:
+    blocking.append(
+        "resolved bus dir is not initialized — watching it would emit nothing "
+        "forever and read as a healthy, quiet bus"
+    )
+if overridden and not explicit:
+    blocking.append(
+        "HOME is overridden and SESSION_BUS_DIR is unset, so ~/.claude/session-bus "
+        "resolves to a private path, not the machine's shared bus. Sending there "
+        "creates a second bus and succeeds silently"
+    )
+if registered is False:
+    blocking.append("handle is not registered on this bus — run `bus init <handle>` first")
+
+# Non-blocking: true, worth knowing, does not stop the arming.
+notes = []
+if overridden and explicit:
+    notes.append(
+        "HOME is overridden but SESSION_BUS_DIR is set, which resolves it. Export it "
+        "on every call — shell state does not persist between an agent's tool calls"
+    )
+if not shutil.which("fswatch"):
+    notes.append("fswatch absent — watch mode falls back to polling")
+if watcher_pids:
+    notes.append(
+        "a watcher is already running for this handle (pid %s). Arming a second one "
+        "doubles every notification" % ", ".join(watcher_pids)
+    )
+
+print(json.dumps({
+    "home": os.environ.get("HOME"),
+    "passwd_home": real,
+    "home_overridden": overridden,
+    "session_bus_dir_env": explicit,
+    "resolved_bus_dir": bus,
+    "resolved_initialized": init,
+    "shared_bus_dir": shared,
+    "shared_initialized": os.path.isfile(os.path.join(shared, "handles.json")),
+    "fswatch": shutil.which("fswatch"),
+    "handle": handle or None,
+    "handle_registered": registered,
+    "watcher_pids": [int(p) for p in watcher_pids],
+    "ready": not blocking,
+    "blocking": blocking,
+    "notes": notes,
+}, indent=2))
+sys.exit(1 if blocking else 0)
+PY
+}
+
+# Newest message as two lines: id (for dedupe), then the display line.
+emit_latest() {
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], 'rb') as fh:
+        d = json.loads(fh.readlines()[-1].decode('utf-8', 'replace'))
+    print(d.get('id', ''))
+    print('BUS <- %s | %s' % (d.get('from', '?'), str(d.get('subject', ''))[:130]))
+except Exception as e:
+    print('')
+    print('BUS <- unreadable inbox tail (%s) — run: bus inbox <handle>' % type(e).__name__)
+PY
+}
+
+watch() {
+  local handle="$1" mode="$2" bus inbox file last="" out id
+  bus="$(resolve_bus)"; inbox="$bus/inbox"; file="$inbox/$handle.jsonl"
+
+  if ! is_initialized "$bus"; then
+    echo "desktop-wake: '$bus' is not an initialized bus — run: desktop-wake --check" >&2
+    exit 2
+  fi
+  mkdir -p "$inbox"; touch "$file"
+
+  # A dead watcher and a quiet bus are indistinguishable from the session's side,
+  # so the exit has to speak. The trap covers every exit this process can observe:
+  # the pipeline dying, the watch task being stopped, the session going away.
+  # SIGKILL cannot be trapped and leaves no notice at all, which is why --check
+  # reports a running watcher rather than letting silence stand for health.
+  DW_HANDLE="$handle"
+  trap 'printf "desktop-wake EXITED for %s — push-wake is DOWN, messages will go unnoticed\n" "$DW_HANDLE"' EXIT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+
+  # Seed the dedupe state with whatever is already newest, so arming does not
+  # re-announce an already-read message — the touch above is itself a filesystem
+  # event, and a stale re-announcement reads as new mail that never arrived.
+  last="$(emit_latest "$file" | head -1)"
+
+  # Watch the inbox DIRECTORY, not the file: `bus rotate` replaces inbox files and a
+  # watch pinned to an inode goes silently deaf across that. Filter to this handle so
+  # a shared bus carrying every orchestration on the machine is not a firehose.
+  # Every emission is newline-terminated: a line-based consumer can buffer an
+  # unterminated final line indefinitely, which in an event stream is a message
+  # that never surfaces.
+  if [ "$mode" != poll ] && command -v fswatch >/dev/null 2>&1; then
+    fswatch "$inbox" 2>&1 | grep --line-buffered -F "$handle.jsonl" | while read -r _; do
+      out="$(emit_latest "$file")"
+      id="$(printf '%s\n' "$out" | head -1)"
+      # One append can raise several filesystem events, and every line becomes a
+      # notification. Dedupe on message id.
+      [ "$id" = "$last" ] && continue
+      last="$id"
+      printf '%s\n' "$(printf '%s\n' "$out" | tail -1)"
+    done
+  else
+    while :; do
+      out="$(emit_latest "$file")"
+      id="$(printf '%s\n' "$out" | head -1)"
+      if [ -n "$id" ] && [ "$id" != "$last" ]; then
+        last="$id"
+        printf '%s\n' "$(printf '%s\n' "$out" | tail -1)"
+      fi
+      sleep "$POLL_SECS"
+    done
+  fi
+}
+
+case "${1:-}" in
+  --check)      check "${2:-}" ;;
+  --poll)       [ -n "${2:-}" ] || { usage >&2; exit 2; }; watch "$2" poll ;;
+  -h|--help|"") usage ;;
+  -*)           usage >&2; exit 2 ;;
+  *)            watch "$1" auto ;;
+esac
