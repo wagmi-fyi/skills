@@ -5,7 +5,7 @@ Pulls account list from QBO and upserts to local chart_of_accounts table.
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
-      .venv/bin/python3 ~/.claude/skills/bookkeeping/adapters/qbo/sync_coa.py [--dry_run]
+      {python} {module_root}/adapters/qbo/sync_coa.py [--dry_run]
 """
 
 import argparse

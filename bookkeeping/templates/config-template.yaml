@@ -29,6 +29,11 @@ client_id: ""
 
 # Module-specific
 workpapers_dir: "{output_folder}/workpapers"
+
+# System of record — the external ledger staging publishes into.
+# DECLARED here, never detected. Also the {sor} token for publish-adapter
+# resolution (see operations/process-period.md).
+# Empty defaults to QBO and emits a note on every run; declare it to silence.
 default_system_of_record: ""
 
 # Period configuration

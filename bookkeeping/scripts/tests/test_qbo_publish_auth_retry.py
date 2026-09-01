@@ -29,7 +29,21 @@ import types
 import unittest
 from unittest import mock
 
-from quickbooks.exceptions import AuthorizationException, QuickbooksException
+# The QBO SDK is adapter-tier (requirements.txt, QBO block). Without it this
+# module's subject cannot be exercised, so its cases skip rather than error and
+# a non-QBO deployment still runs a green core suite. The guard is a class
+# decorator, not a module-level SkipTest: unittest only converts the latter to a
+# skip under discover(), and raises it uncaught when a module is named directly.
+SOR_SKIP_REASON = (
+    "QBO SDK absent (python-quickbooks) — SoR publisher tests skipped. "
+    "Install the QBO block from the bookkeeping skill's requirements.txt."
+)
+try:
+    from quickbooks.exceptions import AuthorizationException, QuickbooksException
+    QBO_SDK_PRESENT = True
+except ImportError:
+    QBO_SDK_PRESENT = False
+    AuthorizationException = QuickbooksException = None
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_DIR = os.path.dirname(THIS_DIR)
@@ -90,6 +104,7 @@ class _ScriptedObj:
         return self
 
 
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
 class AuthRetryTests(unittest.TestCase):
 
     def setUp(self):

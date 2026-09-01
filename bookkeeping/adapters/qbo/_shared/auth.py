@@ -19,14 +19,15 @@ call time. The holder is threaded down from publish.py wherever a raw client
 went; `resolve_client()` unwraps it (and passes raw clients through, so
 legacy callers and hermetic tests are unaffected).
 
-Philosophy note: the skill says "no built-in retry — Claude decides
+Philosophy note: the skill says "no built-in retry; the caller decides
 recovery." The reactive auth-retry is a narrow, sanctioned exception:
 transport-level, single attempt, typed-401 only, inside one long locked run
 where the agent cannot intervene. Business faults (6xxx/10000) are NEVER
 retried here — they go to the _shared/locate.py read-back instead.
 
-When the refresh token itself is expired/revoked (REFRESH_TOKEN_EXPIRED —
-Intuit refresh tokens die after ~100 days idle), recovery is impossible
+When the refresh token itself is expired/revoked (REFRESH_TOKEN_EXPIRED;
+Intuit refresh tokens last five years at most and rotate on every refresh,
+so a stale stored value fails the same way), recovery is impossible
 mid-run: the holder is marked auth-dead and every subsequent save fails FAST
 and LOUD with a re-authorize message, without network calls. That keeps the
 run's per-object accounting intact (each unposted object marked error,

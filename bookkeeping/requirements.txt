@@ -1,8 +1,8 @@
 # Bookkeeping skill — Python dependencies (pinned, reproducible).
 #
 # Install into the project venv (one command):
-#   uv-managed venv:  uv pip install --python .venv/bin/python -r ~/.claude/skills/bookkeeping/requirements.txt
-#   plain venv:       .venv/bin/pip install -r ~/.claude/skills/bookkeeping/requirements.txt
+#   uv run --with-requirements <bookkeeping skill dir>/requirements.txt <script>.py
+# Or install them into whatever environment the workspace already uses.
 #
 # Grouped CORE vs. ADAPTER. Bookkeeping's SoR/feed integrations are pluggable adapters, so are their
 # deps. Pure-core (CSV ingest -> categorize -> reconcile -> SQLite staging) needs only pyyaml; the
@@ -25,9 +25,9 @@ pyyaml==6.0.3
 python-dotenv==1.2.2
 
 # --- QBO adapter: system-of-record publish. Equals the /qbo skill's SDK deps, which bookkeeping
-#     re-exports at runtime (adapters/qbo/_shared/client.py resolves the qbo skill's scripts/ three
-#     ways and puts it on sys.path), so /qbo must be installed and its packages present.
-#     intuit-oauth is also pulled in transitively by python-quickbooks. ---
+#     re-exports at runtime (adapters/qbo/_shared/client.py puts ~/.claude/skills/qbo/scripts on
+#     sys.path), so /qbo must be installed and its packages present. intuit-oauth is also pulled in
+#     transitively by python-quickbooks. ---
 python-quickbooks==0.9.12
 intuit-oauth==1.2.6
 

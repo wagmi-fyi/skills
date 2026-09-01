@@ -98,7 +98,7 @@ Exit code: 0 = gate clear; 1 = untagged records found (Hard Stop — resolve bef
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
-      .venv/bin/python3 ~/.claude/skills/bookkeeping/adapters/qbo/scan_sor_direct_records.py \
+      {python} {module_root}/adapters/qbo/scan_sor_direct_records.py \
       --period_start 2026-05-24 --period_end 2026-06-20 [--entity_types JournalEntry,Invoice]
 """
 

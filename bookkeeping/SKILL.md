@@ -25,6 +25,7 @@ When this skill is invoked:
      6. `{database_dir}` → resolve `{project-root}` placeholder
    - **Use only resolved absolute paths for all file operations. Never assume or hardcode directory locations.**
    - Store resolved values: `{user_name}`, `{client_name}`, `{module_root}`, `{local_dir}`, `{output_folder}`, `{workpapers_dir}`, `{database_dir}`, `{database_name}`, `{firm_root}`, `{firm_id}`
+   - **Read the system-of-record binding** from `default_system_of_record` — declared in config, never detected. It names the SoR and is the `{sor}` token for publish-adapter resolution. Empty means QBO, and the default is announced rather than silent. `config_loader.get_sor()` applies this for scripts.
    - If no config exists: suggest onboarding — "No client config found. Let's set one up."
 
 2. **Load firm context** (if `{firm_root}` is set and directory exists)
@@ -135,7 +136,7 @@ Frontmatter tracks: `domains_status`, `action_items`, `roadblocks`, `status`
 
 ### Scripts
 
-Atomic operations with JSON stdout. Claude orchestrates. Scripts never retry — Claude decides recovery. Always check `--help` before invocation (capability registry is for discovery, not invocation syntax).
+Atomic operations with JSON on stdout. The agent sequences them. A script never retries; recovery is the caller's decision. Always check `--help` before invocation, since the capability registry is for discovery and not for invocation syntax.
 
 ---
 
@@ -147,23 +148,23 @@ Atomic operations with JSON stdout. Claude orchestrates. Scripts never retry —
 
 ## Dependencies
 
-Python deps are pinned in [`requirements.txt`](requirements.txt) (verified on Python 3.12 and 3.14). One-command install into the project venv:
+**A deliberate deviation.** `master-builder`'s convention is that Python dependencies
+are declared inline in each script, as PEP 723 metadata, with no separate list to
+drift. This skill keeps a manifest instead. Its QBO adapters put the `qbo` skill's
+`scripts` directory on `sys.path` and import from it at runtime, so the two skills
+share one environment, and PEP 723's per-script isolation does not serve that. The
+manifest also carries the core-against-adapter grouping and the import-name trap
+below, neither of which fits in a bare package list. Ruled 2026-08-16. One manifest,
+never both.
+
+Python deps are pinned in [`requirements.txt`](requirements.txt), verified on Python 3.12 and 3.14. They are not declared inline, so the invocation carries them. Match whatever the workspace already establishes; with nothing established, `uv` resolves them without a pre-built environment:
 
 ```bash
-# uv-managed venv (a container base image may already provide pandas/numpy/openpyxl/etc.):
-uv pip install --python .venv/bin/python -r ~/.claude/skills/bookkeeping/requirements.txt
-# Local / clean venv:
-.venv/bin/pip install -r ~/.claude/skills/bookkeeping/requirements.txt
+uv run --with-requirements {module_root}/requirements.txt {module_root}/scripts/<script>.py
 ```
 
-`requirements.txt` is grouped **core vs. adapter** — pure-core (ingest → categorize → reconcile → SQLite staging) needs only `pyyaml`; the SoR/feed adapters (QBO, Stripe, Excel) each add their own. The full file is the safe default; a minimal or non-QBO deployment installs Core + only the adapter blocks it uses.
+`requirements.txt` is grouped **core vs. adapter**. Pure core (ingest → categorize → reconcile → SQLite staging) needs only `pyyaml`; the system-of-record and feed adapters each add their own. The full file is the safe default. A minimal or non-QBO deployment installs core plus only the adapter blocks it uses.
 
-The QBO block is a **superset tie to the `qbo` skill's deps**: the QBO adapters re-export `qbo_client` from the `qbo` skill at runtime (`adapters/qbo/_shared/client.py`). **The `qbo` skill is a hard dependency of every QBO adapter here.** The adapter finds its `scripts/` directory three ways, first one that exists winning: `QBO_SKILL_SCRIPTS` if set, then `qbo` installed beside this skill, then `~/.claude/skills/qbo/scripts`. Install `qbo` in one of them before using QuickBooks as the system of record. With none of them present the import raises, naming every path it tried, and the whole QBO publish path is unavailable.
+The QBO block is a **superset tie to the [`qbo`](../qbo/SKILL.md) skill's deps.** The QBO adapters re-export `qbo_client` from the qbo skill at runtime, so `qbo` must be installed and its packages present. `adapters/qbo/_shared/client.py` resolves where qbo is: `QBO_SKILL_SCRIPTS` first, then a qbo skill sitting beside this one, then a global install. Its error names every path it tried.
 
-**Install the package names, not the import names.** The OAuth client imports as `intuitlib` but ships on PyPI as **`intuit-oauth`** — `pip install intuitlib` grabs the wrong project. `requirements.txt` carries the correct mapping; install from it rather than by hand.
-
----
-
-## Sync
-
-Runtime (global): `~/.claude/skills/bookkeeping/`
+**Install the package names, not the import names.** The OAuth client imports as `intuitlib` and ships on PyPI as **`intuit-oauth`**. Installing `intuitlib` fetches an unrelated project. `requirements.txt` carries the mapping; install from it rather than by hand.

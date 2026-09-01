@@ -1,1 +1,1 @@
-# Shared module for the bookkeeping scripts
+# Shared module for Quintessence tools

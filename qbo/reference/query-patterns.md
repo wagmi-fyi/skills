@@ -363,7 +363,7 @@ The QBO access token expires every 60 minutes. The `qbo_client.py` module handle
 
 1. On each API call, token is refreshed proactively
 2. New tokens are persisted to `.env` file
-3. If refresh token expires (100 days), manual re-auth required
+3. If the refresh token is expired or revoked, manual re-auth is required. A refresh token lasts five years at most and rotates on every refresh, so a stale stored value fails the same way. [`credential-setup.md`](credential-setup.md) carries the dates and the source.
 
 ### Manual Re-authorization
 
@@ -372,7 +372,7 @@ If you see `REFRESH_TOKEN_EXPIRED` error:
 1. Go to [Intuit OAuth Playground](https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl)
 2. Complete OAuth flow for your app
 3. Copy new access and refresh tokens
-4. Update `.claude/skills/qbo/scripts/.env`
+4. Update the `.env` the skill resolved (SKILL.md, "Where the skill looks")
 
 ---
 

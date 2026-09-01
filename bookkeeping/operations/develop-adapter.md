@@ -97,13 +97,13 @@ if not _config_path:
 Core scripts use `config_loader.load_config()`. Local adapters bootstrap the module root from config first.
 
 ### Fail-Fast Philosophy
-- No retry logic (Claude decides recovery)
+- No retry logic (the caller decides recovery)
 - Fail loudly with clear errors (no swallowed exceptions)
 - Let external systems validate (API errors bubble up)
-- Minimal input validation (Claude sees errors and fixes)
+- Minimal input validation (the caller reads the error and corrects the call)
 
 ### Atomic Operations
-One script = one thing. No monolithic workflows combining multiple steps. If step 4 fails, Claude needs to know exactly where.
+One script = one thing. No monolithic workflows combining multiple steps. When step 4 fails, the caller has to be able to tell that it was step 4.
 
 ---
 
@@ -198,7 +198,7 @@ Before proceeding to adversarial review, verify:
 - [ ] Project-context rules followed (if present)
 - [ ] Error handling consistent with codebase
 
-**Adapter conventions for this skill:**
+**Adapter conventions:**
 - [ ] Output contract (structured JSON to stdout, progress to stderr)
 - [ ] BOOKKEEPING_CONFIG_PATH usage (no hardcoded paths)
 - [ ] Three-layer placement verified
@@ -293,4 +293,4 @@ Acknowledge review without applying fixes.
 
 ## Quality Mindset
 
-Write agent-first code. Scripts should fail loudly, do one thing well, and trust Claude to orchestrate. Avoid defensive over-engineering — if Claude can handle an error better than your code, let it bubble up. Focus on the adapter's core job: transform data reliably, report results clearly, and get out of the way.
+Write agent-first code. A script fails loudly, does one thing, and leaves the sequencing to its caller. Skip the defensive layers. An error whose handling needs context from outside the script belongs outside the script. The adapter's job is to transform data reliably, report the result clearly, and get out of the way.
