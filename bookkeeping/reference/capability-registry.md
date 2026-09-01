@@ -287,7 +287,7 @@ If `{firm_root}` is not set, steps 3-4 are skipped. Core adapters documented bel
 
 ### adapters/qbo/publish.py
 
-- **Purpose:** Publishes journal entries, invoices (receivable TAs), bills (payable TAs), credit memos, vendor credits, credit applications, bank-funded payments/bill-payments, and owner-cleared CM/VC applications to QuickBooks Online. Also handles inline payment adjustments (chargebacks, damages) via the legacy CM/VC inline path in `_publishers/payments.py` and `bill_payments.py`. Thin orchestrator — business logic in `qbo/_publishers/`.
+- **Purpose:** Publishes journal entries, invoices (receivable TAs), bills (payable TAs), credit memos, vendor credits, credit applications, bank-funded payments/bill-payments, and owner-cleared CM/VC applications to QuickBooks Online. Also handles inline payment adjustments (chargebacks, damages) via the inline-adjustment CM/VC path in `_publishers/payments.py` and `bill_payments.py`. Thin orchestrator — business logic in `qbo/_publishers/`.
 - **Domain:** Publishing
 - **Arguments:**
   - `--sync_status` (str, optional) -- Filter by sync status: `pending` (default) or `error`.

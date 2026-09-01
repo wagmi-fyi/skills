@@ -2,6 +2,8 @@
 
 Reference for common QuickBooks Online entities, their key attributes, and query patterns.
 
+Commands below use `{qbo}` for this skill's directory and `{python}` for the invocation form, both resolved in `SKILL.md` under Activation.
+
 ## Priority Entities
 
 ### Account (Chart of Accounts)
@@ -24,7 +26,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 
 **Example Query:**
 ```bash
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Account --where="AccountType = 'Bank'"
+{python} {qbo}/scripts/query.py --entity=Account --where="AccountType = 'Bank'"
 ```
 
 **Sample Output:**
@@ -67,7 +69,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 
 **Example Query:**
 ```bash
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=JournalEntry --where="TxnDate >= '2024-01-01'" --max_results=50
+{python} {qbo}/scripts/query.py --entity=JournalEntry --where="TxnDate >= '2024-01-01'" --max_results=50
 ```
 
 ---
@@ -96,7 +98,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 **Example Query:**
 ```bash
 # Get unpaid invoices
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Invoice --where="Balance > '0'"
+{python} {qbo}/scripts/query.py --entity=Invoice --where="Balance > '0'"
 ```
 
 ---
@@ -124,7 +126,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 **Example Query:**
 ```bash
 # Get bills from a specific vendor
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Bill --where="VendorRef = '456'"
+{python} {qbo}/scripts/query.py --entity=Bill --where="VendorRef = '456'"
 ```
 
 ---
@@ -150,7 +152,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 
 **Example Query:**
 ```bash
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Customer --where="Active = true"
+{python} {qbo}/scripts/query.py --entity=Customer --where="Active = true"
 ```
 
 ---
@@ -175,7 +177,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 
 **Example Query:**
 ```bash
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Vendor --where="Active = true"
+{python} {qbo}/scripts/query.py --entity=Vendor --where="Active = true"
 ```
 
 ---
@@ -201,7 +203,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 
 **Example Query:**
 ```bash
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Item --where="Type = 'Service'"
+{python} {qbo}/scripts/query.py --entity=Item --where="Type = 'Service'"
 ```
 
 ---
@@ -223,7 +225,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 
 **Example Query:**
 ```bash
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Class
+{python} {qbo}/scripts/query.py --entity=Class
 ```
 
 ---
@@ -248,7 +250,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 
 **Example Query:**
 ```bash
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Payment --where="TxnDate >= '2024-01-01'"
+{python} {qbo}/scripts/query.py --entity=Payment --where="TxnDate >= '2024-01-01'"
 ```
 
 ---
@@ -271,7 +273,7 @@ Reference for common QuickBooks Online entities, their key attributes, and query
 
 **Example Query:**
 ```bash
-.venv/bin/python3 .claude/skills/qbo/scripts/query.py --entity=Deposit --where="TxnDate >= '2024-01-01'"
+{python} {qbo}/scripts/query.py --entity=Deposit --where="TxnDate >= '2024-01-01'"
 ```
 
 ---

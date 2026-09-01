@@ -684,8 +684,8 @@ class StandaloneLineSplitTests(unittest.TestCase):
         je = insert_je_with_postings(self.conn, [
             {'account_code': '92830', 'direction': 'debit', 'amount': face},
             {'account_code': '2000', 'direction': 'credit', 'amount': face},
-        ], 'VendX')
-        return insert_ta(self.conn, 'payable', 'VendX', je, '2000')
+        ], 'Unishippers')
+        return insert_ta(self.conn, 'payable', 'Unishippers', je, '2000')
 
     def _run(self, args_list):
         cfg = make_config_yaml(self.path)

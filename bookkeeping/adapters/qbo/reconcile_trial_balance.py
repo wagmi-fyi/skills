@@ -31,7 +31,7 @@ report's own Net Income line, or the run FAILS rather than trust a misparse.
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
-      .venv/bin/python3 ~/.claude/skills/bookkeeping/adapters/qbo/reconcile_trial_balance.py \
+      {python} {module_root}/adapters/qbo/reconcile_trial_balance.py \
       --as_of_date 2026-05-31 --fiscal_year_start January
 """
 

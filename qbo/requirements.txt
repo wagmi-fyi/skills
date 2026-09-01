@@ -1,8 +1,8 @@
 # QBO skill — Python dependencies (pinned, reproducible).
 #
-# Install into the project venv (one command):
-#   uv-managed venv:  uv pip install --python .venv/bin/python -r ~/.claude/skills/qbo/requirements.txt
-#   plain venv:       .venv/bin/pip install -r ~/.claude/skills/qbo/requirements.txt
+# Resolve these at invocation, from this file, relative to the skill directory:
+#   uv run --with-requirements <qbo skill dir>/requirements.txt <script>.py
+# Or install them into whatever environment the workspace already uses.
 #
 # import name -> PyPI PACKAGE name (pip needs the package name; some differ):
 #   quickbooks  -> python-quickbooks   QBO SDK

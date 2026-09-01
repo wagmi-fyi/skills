@@ -34,9 +34,23 @@ import unittest
 import uuid
 from unittest import mock
 
-from quickbooks.exceptions import (
-    QuickbooksException, ValidationException, SevereException
+# The QBO SDK is adapter-tier (requirements.txt, QBO block). Without it this
+# module's subject cannot be exercised, so its cases skip rather than error and
+# a non-QBO deployment still runs a green core suite. The guard is a class
+# decorator, not a module-level SkipTest: unittest only converts the latter to a
+# skip under discover(), and raises it uncaught when a module is named directly.
+SOR_SKIP_REASON = (
+    "QBO SDK absent (python-quickbooks) — SoR publisher tests skipped. "
+    "Install the QBO block from the bookkeeping skill's requirements.txt."
 )
+try:
+    from quickbooks.exceptions import (
+        QuickbooksException, ValidationException, SevereException
+    )
+    QBO_SDK_PRESENT = True
+except ImportError:
+    QBO_SDK_PRESENT = False
+    QuickbooksException = ValidationException = SevereException = None
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_DIR = os.path.dirname(THIS_DIR)
@@ -158,6 +172,7 @@ def insert_synced_receivable_with_tap(conn, face=1000, ext_id='INV-1'):
 
 # --------------------------- fault classification ---------------------------
 
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
 class FaultCodeTests(unittest.TestCase):
 
     def setUp(self):
@@ -187,6 +202,7 @@ class FaultCodeTests(unittest.TestCase):
 
 # --------------------------- locate_posted_object ---------------------------
 
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
 class LocateTests(unittest.TestCase):
 
     TAG = '[bk:abc12345]'
@@ -261,6 +277,7 @@ class _FaultyObj:
         raise self._exc
 
 
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
 class ChokepointTests(unittest.TestCase):
 
     def setUp(self):
@@ -337,6 +354,7 @@ class ChokepointTests(unittest.TestCase):
 
 # --------------------------- 'verify' sync routing ---------------------------
 
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
 class VerifyStatusRoutingTests(unittest.TestCase):
 
     def setUp(self):
@@ -380,6 +398,7 @@ class VerifyStatusRoutingTests(unittest.TestCase):
 
 # ------------------------- publisher wiring (payments) -------------------------
 
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
 class PaymentPublisherWiringTests(unittest.TestCase):
 
     def setUp(self):
@@ -457,6 +476,7 @@ class PaymentPublisherWiringTests(unittest.TestCase):
 
 # --------------------------- DocNumber stamping ---------------------------
 
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
 class DocNumberStampingTests(unittest.TestCase):
     """Hybrid tag stamping (decision B, 2026-06-10): when the adapter provides
     no doc number, DocNumber = the [bk:] tag — QBO's duplicate-DocNumber
@@ -528,6 +548,7 @@ class DocNumberStampingTests(unittest.TestCase):
 
 # ------------------------ journal entry tag + fault path ------------------------
 
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
 class JournalEntryIdempotencyTests(unittest.TestCase):
 
     def setUp(self):

@@ -13,48 +13,86 @@ from typing import Dict, Optional, Tuple, Type
 from dotenv import load_dotenv
 
 
-def _find_env_file() -> str:
-    """Locate QBO credentials .env file.
+REQUIRED_CREDENTIALS = (
+    'QBO_CLIENT_ID',
+    'QBO_CLIENT_SECRET',
+    'QBO_ACCESS_TOKEN',
+    'QBO_REFRESH_TOKEN',
+    'QBO_REALM_ID',
+)
 
-    Resolution order:
-    1. QBO_ENV_PATH env var (explicit override)
-    2. BOOKKEEPING_CONFIG_PATH → {local_dir}/adapters/.env (shared with bookkeeping)
-    3. {cwd}/.claude/skills/qbo/.env (legacy standalone)
+
+def _env_candidates() -> list:
+    """Every path this module will accept as the credentials .env, in order.
+
+    First existing file wins:
+
+    1. QBO_ENV_PATH — explicit override, for a layout the rules below miss.
+    2. BOOKKEEPING_CONFIG_PATH → {local_dir}/adapters/.env. Shared with the
+       bookkeeping skill so a refreshed token cannot drift between the two.
+    3. {cwd}/.claude/skills/qbo/.env — per-project, resolved against the
+       working directory. That dependence is what lets one project hold its
+       own company file. It also means the same command run from a
+       subdirectory resolves somewhere else.
+    4. ~/.claude/skills/qbo/.env — a global install.
+
+    No candidate sits inside this skill's own directory. A credential does not
+    belong in a directory that gets copied, synced, or committed.
     """
-    # 1. Explicit override
-    explicit = os.environ.get('QBO_ENV_PATH')
-    if explicit and os.path.exists(explicit):
-        return explicit
+    candidates = [os.environ.get('QBO_ENV_PATH')]
 
-    # 2. Derive from bookkeeping config
     config_path = os.environ.get('BOOKKEEPING_CONFIG_PATH')
     if config_path:
         local_dir = os.path.dirname(os.path.abspath(config_path))
-        bk_env = os.path.join(local_dir, 'adapters', '.env')
-        if os.path.exists(bk_env):
-            return bk_env
+        candidates.append(os.path.join(local_dir, 'adapters', '.env'))
 
-    # 3. Legacy fallback
-    project_env = os.path.join(os.getcwd(), '.claude', 'skills', 'qbo', '.env')
-    if os.path.exists(project_env):
-        return project_env
+    candidates.append(os.path.join(os.getcwd(), '.claude', 'skills', 'qbo', '.env'))
+    candidates.append(os.path.expanduser('~/.claude/skills/qbo/.env'))
+
+    return [c for c in candidates if c]
+
+
+def _find_env_file() -> Optional[str]:
+    """Return the .env holding the credentials, or None if none is needed.
+
+    The environment wins. When every required variable is already set — by a
+    secrets manager, a container, an `op run` wrapper, a CI job — no file is
+    read and none has to exist. That is the path with no plaintext credential
+    at rest, and it is the preferred one.
+
+    Otherwise a .env is located from _env_candidates(). Failing that, this
+    exits naming both the variables it wanted and every path it tried.
+    """
+    if all(os.environ.get(var) for var in REQUIRED_CREDENTIALS):
+        return None
+
+    candidates = _env_candidates()
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
 
     print(json.dumps({
         "success": False,
         "error": "QBO_NOT_CONFIGURED",
         "message": (
-            "QBO credentials not found. Set BOOKKEEPING_CONFIG_PATH or "
-            f"create {os.path.join(os.getcwd(), '.claude', 'skills', 'qbo', '.env')} "
-            "with your OAuth credentials."
-        )
+            "QBO credentials not found. Either set the required variables in "
+            "the environment, or point QBO_ENV_PATH at a .env file, or create "
+            "one of the paths in tried_paths. scripts/.env.example is the "
+            "template."
+        ),
+        "required_vars": list(REQUIRED_CREDENTIALS),
+        "tried_paths": candidates,
     }))
     sys.exit(1)
 
 
-# Resolve and load project-level credentials
+# Resolve credentials. The environment is authoritative; a .env only fills gaps.
 _env_file = _find_env_file()
-load_dotenv(_env_file)
-print(f"QBO: loaded credentials from {_env_file}", file=sys.stderr)
+if _env_file:
+    load_dotenv(_env_file)
+    print(f"QBO: loaded credentials from {_env_file}", file=sys.stderr)
+else:
+    print("QBO: using credentials from the environment; no .env read", file=sys.stderr)
 
 # QBO SDK imports
 try:
@@ -160,6 +198,16 @@ def save_refreshed_tokens(access_token: str, refresh_token: str) -> bool:
     Returns:
         True if tokens were saved successfully, False otherwise.
     """
+    if not _env_file:
+        print(
+            "WARNING: credentials came from the environment, so there is no "
+            "file to persist refreshed tokens to. Update QBO_ACCESS_TOKEN and "
+            "QBO_REFRESH_TOKEN wherever they are stored, or the next run "
+            "starts from the old pair.",
+            file=sys.stderr,
+        )
+        return False
+
     try:
         with open(_env_file, 'r') as f:
             lines = f.readlines()
@@ -319,7 +367,7 @@ def refresh_client(client) -> Tuple[Optional[object], Optional[Dict]]:
             return None, {
                 "success": False,
                 "error": "REFRESH_TOKEN_EXPIRED",
-                "message": "QBO refresh token has expired (valid for 100 days). Re-authorize at: https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl and update .env with new tokens."
+                "message": "QBO refresh token is expired or revoked. A refresh token lasts five years at most and rotates on every refresh, so a stale stored value fails the same way. Re-authorize and store the new tokens: see reference/credential-setup.md."
             }
         return None, {
             "success": False,

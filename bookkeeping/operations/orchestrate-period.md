@@ -6,24 +6,25 @@ result before trusting it. This is `process-period` run in a parallel,
 multi-session mode — the domain logic is unchanged; what changes is who does the
 work and how it's checked.
 
-## Substrate — `/orchestrate` if present
+## Substrate — the orchestrate skill if it is available
 
-This operation predates the **`/orchestrate`** skill, which automates the very relay
-it describes. Before running, read the **`orchestrate`** config key (firm-level
+This operation predates the **orchestrate** skill, which automates the relay it
+describes. Before running, read the **`orchestrate`** config key (firm-level
 `{firm_root}/config.yaml`; a client `config.yaml` may override):
 
-- **`true` — or unset/`auto` with `~/.claude/skills/orchestrate` present** → run this
-  close **on `/orchestrate`**: bootstrap it with this close as the brief, then `run`.
-  It supplies the substrate — a message **bus** (no human relay), **auto-spawned
-  visible delegate panes**, **push-wake**, and the **crossroads/reversibility
-  contract**. Everything below is unchanged and becomes the *method `/orchestrate`
-  executes* (the dependency graph, per-domain gates, verify-don't-trust, the
-  workpaper); the human-relay role dissolves — the human gates only design
-  crossroads and human-only steps.
-- **`false` — or `/orchestrate` absent** → run the **human-relay** model below.
+- **`true`, or unset/`auto` while the orchestrate skill is available to you** →
+  run this close on orchestrate: bootstrap it with this close as the brief, then
+  `run`. It supplies the substrate: a message **bus** in place of a human relay,
+  **spawned delegate sessions**, a **wake** path, and the
+  **crossroads/reversibility contract**. Everything below is unchanged and becomes
+  the method orchestrate executes, including the dependency graph, the per-domain
+  gates, verify-don't-trust, and the workpaper. The human-relay role dissolves, and
+  the human gates only design crossroads and human-only steps.
+- **`false`, or orchestrate is not available** → run the **human-relay** model below.
 
-Set `orchestrate: false` where the skill isn't installed, so the agent doesn't probe
-for it each period.
+Whether the skill is available is something the harness already tells you. Set
+`orchestrate: false` where it is not installed, so this is not re-checked every
+period.
 
 ## Intent
 
@@ -100,7 +101,7 @@ can execute its unit correctly and report verifiably. Principles, not a template
   the *core skill*, where it's absent, so the delegate wrongly reports it "missing"
   and silently falls back to a generic path. When you must name a specific file,
   use a **project-root-absolute path**. A context-blind — or wrongly-pathed —
-  session silently violates conventions. *(Earned on a live close: a review delegate
+  session silently violates conventions. *(Earned CPL P07: a review delegate
   mis-resolved `../operations/aged-receivables.md` to the core skill, never loaded
   the local registry, missed the local by-invoice adapter, and shipped the wrong
   aged artifact until a human caught it.)*

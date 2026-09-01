@@ -223,7 +223,7 @@ def query_trade_account_payments(
         # type=credit_memo, source_ta_id NULL, import_id set, no settlement_id). Those publish
         # as ONE consolidated mixed-Line Payment NET of the CM via
         # _publishers/payments.publish_payout_consumed_credits — NOT as gross singletons here.
-        # No-op for any payout without such a TAP (the bank-funded CM-consume bug). Group key = payout_id.
+        # No-op for any payout without such a TAP (the Tiger $197.91 bug). Group key = payout_id.
         """NOT EXISTS (
             SELECT 1 FROM trade_account_payments cmtap
             JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
@@ -415,7 +415,7 @@ def query_payout_consumed_credits(
 ) -> List[Dict]:
     """Fetch bank-funded TAPs for payouts that consume a CreditMemo *within* the payout.
 
-    Earned on a live close (the bank-funded CM-consume bug). A payout-keyed channel (e.g. Shopify)
+    Earned SB4U P06 (the Tiger Sauce $197.91 bug). A payout-keyed channel (e.g. Shopify)
     can settle a chargeback/return CreditMemo inside the payout deposit. The credit arrives
     as a **bank-funded CM-consume TAP** — parent trade_account type='credit_memo',
     source_ta_id NULL, import_id set — carrying NO settlement_id (the channel groups by

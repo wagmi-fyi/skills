@@ -11,7 +11,7 @@ separate "(Vendor)" contact for the A/P side and updating local postings/TAs.
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
-      .venv/bin/python3 ~/.claude/skills/bookkeeping/adapters/qbo/sync_contacts.py [--dry_run]
+      {python} {module_root}/adapters/qbo/sync_contacts.py [--dry_run]
 """
 
 import argparse

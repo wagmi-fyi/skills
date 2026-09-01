@@ -6,7 +6,15 @@ resolves path placeholders, exposes get_db_path().
 """
 
 import os
+import sys
+
 import yaml
+
+# Applied when config declares no system of record.
+DEFAULT_SOR = 'qbo'
+
+# The default-SoR note is emitted once per process, not once per call.
+_SOR_DEFAULT_NOTED = False
 
 
 def _find_config_path():
@@ -124,6 +132,46 @@ def get_coding_config():
         'min_confidence_to_categorize': coding.get('min_confidence_to_categorize', 5),
         'min_confidence_to_auto_approve': coding.get('min_confidence_to_auto_approve', 9),
     }
+
+
+def get_sor():
+    """Get the declared system of record.
+
+    The SoR is declared in config, never detected from the environment. The
+    binding is `default_system_of_record`; it also drives publish-adapter
+    resolution as the {sor} token (see operations/process-period.md).
+
+    An absent or empty declaration defaults to QBO and emits a note to stderr —
+    once per process, and to stderr so the JSON stdout contract stays clean.
+    A declared value is honored verbatim and passes silently.
+
+    Returns:
+        dict: {sor: str, declared: bool, raw: str}
+              sor    — lowercase resolution token (e.g. "qbo", "mock")
+              declared — False when the default was applied
+              raw    — the value as written in config, "" when absent
+
+    Raises:
+        FileNotFoundError: If config.yaml not found.
+    """
+    global _SOR_DEFAULT_NOTED
+
+    config = load_config()
+    raw = (config.get('default_system_of_record') or '').strip()
+
+    if raw:
+        return {'sor': raw.lower(), 'declared': True, 'raw': raw}
+
+    if not _SOR_DEFAULT_NOTED:
+        print(
+            "NOTE: no system of record declared in config "
+            "(default_system_of_record is empty) — assuming QBO. "
+            "Declare it to silence this note.",
+            file=sys.stderr,
+        )
+        _SOR_DEFAULT_NOTED = True
+
+    return {'sor': DEFAULT_SOR, 'declared': False, 'raw': ''}
 
 
 def get_period_config():
