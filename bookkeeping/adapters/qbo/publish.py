@@ -7,7 +7,7 @@ bill payments to QBO. Thin dispatcher — business logic lives in _publishers/.
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
-      .venv/bin/python3 ~/.claude/skills/bookkeeping/adapters/qbo/publish.py \
+      {python} {module_root}/adapters/qbo/publish.py \
       --publish_type all --sync_status pending [--dry_run]
 """
 

@@ -5,7 +5,7 @@ Pulls class list from QBO and upserts to local tags table with category='Class'.
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
-      .venv/bin/python3 ~/.claude/skills/bookkeeping/adapters/qbo/sync_classes.py [--dry_run]
+      {python} {module_root}/adapters/qbo/sync_classes.py [--dry_run]
 """
 
 import argparse

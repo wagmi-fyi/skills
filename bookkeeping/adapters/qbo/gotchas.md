@@ -47,7 +47,7 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   `TotalAmt = ΣR − ΣCM`, `Line = [Invoice LinkedTxn(face), CreditMemo LinkedTxn(face)]` (CustomerRef AND
   DepositToAccountRef are required even on a sparse Payment update) → invoice stays Balance 0, bank drops by
   ΣCM, CM Balance→0; then set the local CM-consume TAP `sync=ignore`. Forward fix: the consolidated-payment
-  grouping must also key on `payout_id`. Earned on a live close, on a payout-keyed channel.
+  grouping must also key on `payout_id`. Earned SB4U P06 close 2026-06-29 (Tiger Sauce $197.91).
 
 ## Errors that lie
 

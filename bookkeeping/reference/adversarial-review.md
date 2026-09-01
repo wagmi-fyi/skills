@@ -26,7 +26,7 @@
     <i>- Scripts must fail loudly: no swallowed exceptions, no defensive over-engineering</i>
     <i>- Atomic operations: one script = one thing. No monolithic workflow scripts</i>
     <i>- Output contract: structured JSON to stdout, progress to stderr</i>
-    <i>- No built-in retry logic — Claude decides recovery</i>
+    <i>- No built-in retry logic; the caller decides recovery</i>
     <i>- Config via BOOKKEEPING_CONFIG_PATH env var, not hardcoded paths</i>
     <i>- Three-layer placement: core scripts vs shared adapters vs local adapters</i>
     <i>- Quality gates for outputs that need validation</i>

@@ -4,227 +4,111 @@ license: Apache-2.0
 description: Query and create QuickBooks Online data. Retrieve accounts, invoices, bills, journal entries, customers, vendors, items, classes, payments, deposits. Create new accounts in the chart of accounts. Use when pulling data from QBO, checking balances, looking up transactions, reading QuickBooks records, or adding accounts.
 ---
 
-# QBO Skill
+# QBO
 
-Read and write QuickBooks Online data using the `python-quickbooks` SDK.
+Read and write QuickBooks Online data through the `python-quickbooks` SDK.
 
-**Prerequisites:** Project venv (`.venv/bin/python3`) with the deps from [`requirements.txt`](requirements.txt) installed (see [Dependencies](#dependencies)). Credentials at `.claude/skills/qbo/.env` (see Project Setup).
+## Activation
 
-## Quick Reference
+Resolve two things once, before the first command, and reuse them for the session.
 
-| Operation | Command |
-|-----------|---------|
-| Query entities | `.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=<Entity> [--where="..."] [--max_results=N]` |
-| Get by ID | `.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=<Entity> --id=<ID>` |
-| Count records | `.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=<Entity> --count_only` |
-| Paginate | `.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=<Entity> --start_position=101 --max_results=100` |
-| Create account | `.venv/bin/python3 ~/.claude/skills/qbo/scripts/create_account.py --name="..." --account_type=Expense [--acct_num=6500] [--account_sub_type=...] [--description="..."] [--parent_id=85]` |
-| Find/create customer | `.venv/bin/python3 ~/.claude/skills/qbo/scripts/create_customer.py --display_name="..." [--company_name=...] [--email=...] [--phone=...] [--line1=...] [--city=...] [--state=...] [--zip=...] [--country=...]` |
-| Create invoice | `.venv/bin/python3 ~/.claude/skills/qbo/scripts/create_invoice.py --customer_id=ID --invoice_num="..." --txn_date=YYYY-MM-DD --due_date=YYYY-MM-DD --line_items='[...]' [--class_id=...] [--bill_email=...]` |
-| Send invoice | `.venv/bin/python3 ~/.claude/skills/qbo/scripts/send_invoice.py --invoice_id=ID [--send_to="email@..."]` |
+**`{qbo}` — this skill's own directory.** Every path below is written relative to it. It is the directory holding this file, and the harness knows where it loaded the skill from. Nothing here assumes a particular skill root.
 
-## Common Operations
+**The Python invocation.** Dependencies are pinned in [`requirements.txt`](requirements.txt) and are not declared inline, so the command carries them. Match whatever the workspace already establishes. With no established convention, `uv` resolves them without a pre-built environment:
 
-### List Accounts (Chart of Accounts)
-
-```bash
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=Account
+```
+uv run --with-requirements {qbo}/requirements.txt {qbo}/scripts/query.py --entity=Account
 ```
 
-### Get Bank Accounts Only
+An environment that already has the pins installed runs the script directly. Below, `{python} {qbo}/scripts/<script>.py` stands for whichever form this workspace uses.
 
-```bash
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=Account --where="AccountType = 'Bank'"
-```
+## Scripts
 
-### Get Unpaid Invoices
+Each does one thing and prints JSON to stdout. **Check `--help` before invoking one.** This table is for discovery; the script is the authority on its own arguments.
 
-```bash
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=Invoice --where="Balance > '0'"
-```
+| Script | Does |
+|---|---|
+| `query.py` | Read any entity: by filter, by id, or as a count. Paginates. |
+| `create_account.py` | Add a chart-of-accounts account. Refuses a duplicate name. |
+| `create_customer.py` | Find a customer by display name, or create it. |
+| `create_invoice.py` | Create an invoice from line items. Refuses a duplicate DocNumber. |
+| `send_invoice.py` | Email an existing invoice. |
 
-### Get Journal Entries by Date
+Reads are safe to explore with. Writes land in a live company file, so [`reference/production-testing.md`](reference/production-testing.md) governs the first write against any realm.
 
-```bash
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=JournalEntry --where="TxnDate >= '2024-01-01'"
-```
+## Output
 
-### Get Specific Record by ID
+Every script prints one JSON object to stdout. A read carries `count` (rows in this response), `total_count` (rows matching), and `truncated`. A truncated result needs pagination, not a bigger limit: a page tops out at 1000 rows.
 
-```bash
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=Invoice --id=123
-```
-
-### Count Customers
-
-```bash
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/query.py --entity=Customer --count_only
-```
-
-## Create Account
-
-```bash
-# Expense account with number
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/create_account.py \
-  --name="Merchant Processing Fees" --account_type=Expense --acct_num=6500
-
-# Sub-account under an existing parent
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/create_account.py \
-  --name="Stripe Fees" --account_type=Expense --parent_id=85 \
-  --account_sub_type=OtherMiscellaneousExpense
-```
-
-**Required:** `--name`, `--account_type`. **Optional:** `--account_sub_type`, `--acct_num`, `--description`, `--parent_id`.
-
-**Valid AccountType values:** Bank, Accounts Receivable, Other Current Asset, Fixed Asset, Other Asset, Accounts Payable, Credit Card, Other Current Liability, Long Term Liability, Equity, Income, Cost of Goods Sold, Expense, Other Income, Other Expense
-
-Checks for duplicate names before creating. Returns JSON with the created account details.
-
-## Create Customer
-
-```bash
-# Find or create by display name
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/create_customer.py \
-  --display_name="Example Bakery Co" \
-  --company_name="Example Bakery Co" \
-  --email="info@example.com" --phone="555-0100" \
-  --line1="1 Example Street" --city="Anytown" --state="OH" --zip="43000" --country="US"
-```
-
-**Required:** `--display_name`. **Optional:** `--company_name`, `--email`, `--phone`, `--line1`, `--city`, `--state`, `--zip`, `--country`.
-
-Returns existing customer if DisplayName already exists (`"action": "found_existing"`), otherwise creates new (`"action": "created"`).
-
-## Create Invoice
-
-```bash
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/create_invoice.py \
-  --customer_id=123 \
-  --invoice_num="1700710" \
-  --txn_date="2026-03-01" \
-  --due_date="2026-03-31" \
-  --class_id="1571398" \
-  --line_items='[{"description": "Scottish Shortbread x24", "amount": 150.00, "item_id": "1"}]'
-```
-
-**Required:** `--customer_id`, `--invoice_num`, `--txn_date`, `--due_date`, `--line_items`. **Optional:** `--class_id`, `--bill_email`, `--private_note`.
-
-Line items JSON: `[{"description": "...", "amount": 150.00, "item_id": "QBO_ITEM_ID", "qty": 1}]`. Checks for duplicate DocNumber before creating.
-
-## Send Invoice
-
-```bash
-# Send to customer's default email
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/send_invoice.py --invoice_id=456
-
-# Send to a specific email
-.venv/bin/python3 ~/.claude/skills/qbo/scripts/send_invoice.py --invoice_id=456 --send_to="buyer@example.com"
-```
-
-**Required:** `--invoice_id`. **Optional:** `--send_to` (override recipient email).
-
-## Supported Entities
-
-**Priority entities:** Account, JournalEntry, Invoice, Bill, Customer, Vendor, Item, Class, Payment, Deposit
-
-**All entities:** Account, Attachable, Bill, BillPayment, Budget, Class, CompanyInfo, CreditCardPayment, CreditMemo, Customer, Department, Deposit, Employee, Estimate, Invoice, Item, JournalEntry, Payment, PaymentMethod, Preferences, Purchase, PurchaseOrder, RefundReceipt, SalesReceipt, TaxAgency, TaxCode, TaxRate, TaxService, Term, TimeActivity, Transfer, Vendor, VendorCredit
-
-## Script Arguments
-
-| Argument | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `--entity` | Yes | - | Entity type (Account, Invoice, etc.) |
-| `--id` | No | - | Fetch single record by ID |
-| `--where` | No | - | WHERE clause filter |
-| `--max_results` | No | 100 | Max records (1-1000) |
-| `--start_position` | No | 1 | Pagination offset (1-based) |
-| `--count_only` | No | false | Return count only |
-
-## Output Format
-
-All queries return JSON to stdout:
-
-```json
-{
-  "success": true,
-  "entity": "Invoice",
-  "count": 25,
-  "total_count": 150,
-  "truncated": true,
-  "query": "SELECT * FROM Invoice WHERE ...",
-  "data": [...]
-}
-```
-
-- `count`: Records returned in this response
-- `total_count`: Total matching records
-- `truncated`: true if more records exist beyond `max_results`
+A failure also prints to stdout, as `success: false` with an `error` code, so a caller parses one stream either way. Diagnostics go to stderr.
 
 ## Reference
 
-Load on demand — when the work needs that knowledge. **Precondition references** must be read before performing the associated action for the first time in a session.
+Load on demand, when the work needs that knowledge. A **precondition** reference is read before that action's first use in a session.
 
-| Reference | File | Contains | Precondition |
-|-----------|------|----------|-------------|
-| Entity Reference | `reference/entities.md` | Entity attributes, filters, examples | Before querying an unfamiliar entity |
-| Query Patterns | `reference/query-patterns.md` | SDK methods, syntax, pagination | Before composing a query or paginating a result set |
-| Production Testing | `reference/production-testing.md` | Safe live-realm probes: rails, cleanup, per-realm empirics | Before any write against a live realm |
+| File | Contains | Precondition |
+|---|---|---|
+| [`reference/entities.md`](reference/entities.md) | Per-entity attributes, filters, worked queries | Before querying an unfamiliar entity |
+| [`reference/query-patterns.md`](reference/query-patterns.md) | Query syntax, SDK methods, pagination | Before composing a query or paging a result set |
+| [`reference/production-testing.md`](reference/production-testing.md) | Live-realm probes: rails, cleanup, per-realm findings | Before any write against a live realm |
+| [`reference/credential-setup.md`](reference/credential-setup.md) | Registering the Intuit app and producing the five credential values, step by step | Before helping anyone obtain credentials for the first time |
 
-## Project Setup
+Which entities the SDK exposes is what `query.py --help` lists. That set tracks the SDK, so read it there rather than from a copy.
 
-### Credential Resolution
+## Credentials
 
-The skill finds QBO credentials via this resolution order:
+The skill needs a QuickBooks Online OAuth app and a company to point it at. Five values, all from Intuit:
 
-1. **`QBO_ENV_PATH`** env var — explicit path to a `.env` file (override for edge cases)
-2. **`BOOKKEEPING_CONFIG_PATH`** → derives `{local_dir}/adapters/.env` — shared with bookkeeping adapters (single source of truth when both systems are in use)
-3. **`{cwd}/.claude/skills/qbo/.env`** — standalone use, when this skill runs without bookkeeping
+| Value | Comes from |
+|---|---|
+| Client id, client secret | Your app on the [Intuit Developer Portal](https://developer.intuit.com) |
+| Access token, refresh token | Intuit's OAuth 2.0 Playground, launched from that app's dashboard |
+| Realm id | The company id, visible in the QuickBooks URL |
 
-When used alongside bookkeeping, credentials live at `_local-bookkeeping/adapters/.env` and are shared by both systems. No separate `.claude/skills/qbo/.env` is needed.
+Nobody has these on a first install. [`reference/credential-setup.md`](reference/credential-setup.md) is the walkthrough: registering the app, the compliance questionnaire, the consent step, and the first token exchange. Read it before helping anyone obtain credentials, and follow its rule that a secret never enters the conversation.
 
-### Standalone Setup (without bookkeeping)
+### Where the skill looks
 
-If using this skill without bookkeeping:
+**The environment wins.** When `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_ACCESS_TOKEN`, `QBO_REFRESH_TOKEN` and `QBO_REALM_ID` are already set, no file is read and none has to exist. A secrets manager that injects at invocation lands here, and it is the only arrangement with no plaintext credential sitting on disk. Prefer it.
 
-```bash
-mkdir -p .claude/skills/qbo
-cp ~/.claude/skills/qbo/scripts/.env.example .claude/skills/qbo/.env
-```
+Otherwise the skill looks for a `.env`, first existing file winning:
 
-Edit `.claude/skills/qbo/.env` with your QBO OAuth credentials:
-- **Client ID / Secret** — from your app on the [Intuit Developer Portal](https://developer.intuit.com)
-- **Access / Refresh Tokens** — from the [OAuth 2.0 Playground](https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl)
-- **Realm ID** — your QBO company ID (visible in the QBO URL)
+1. **`QBO_ENV_PATH`** — an explicit path. The override for any layout the rules below miss.
+2. **`BOOKKEEPING_CONFIG_PATH`** → `{local_dir}/adapters/.env`. When bookkeeping is in use, both read and write the same file, so a refreshed token cannot drift between them.
+3. **`{cwd}/.claude/skills/qbo/.env`** — per project, resolved against the directory the command runs in. That dependence is what lets one project hold its own company file, and it means the same command run from a subdirectory resolves somewhere else.
+4. **`~/.claude/skills/qbo/.env`** — a global install.
 
-### Dependencies
+No candidate is inside this skill's directory, and none should be. A credential does not belong somewhere that gets copied, synced, or committed. [`scripts/.env.example`](scripts/.env.example) is the template and names every variable.
 
-Pinned in [`requirements.txt`](requirements.txt), verified on Python 3.12 and 3.14. One-command
-install into the project venv:
+When nothing resolves, the error names the variables it wanted and every path it tried.
 
-```bash
-# uv-managed venv:
-uv pip install --python .venv/bin/python -r ~/.claude/skills/qbo/requirements.txt
-# plain venv:
-.venv/bin/pip install -r ~/.claude/skills/qbo/requirements.txt
-```
+### Tokens
 
-**Install the package names, not the import names.** The OAuth client imports as `intuitlib` but ships on PyPI as **`intuit-oauth`** — `pip install intuitlib` silently grabs the wrong project, and the SDK import then fails closed (`qbo_client.py` sets `QBO_IMPORTS_AVAILABLE = False` rather than erroring). `requirements.txt` carries the correct mapping; install from it rather than by hand.
+Refresh is lazy. A token is renewed only when a call returns 401, and the new pair is written back to whichever `.env` was loaded at startup. That path is logged to stderr, so the write target is never a guess.
 
-### Verify `.gitignore` coverage
+When credentials came from the environment there is no file to write to. The skill says so on stderr and keeps working for the rest of the run. The refreshed pair has to be stored back wherever the environment gets its values, or the next run starts from the old one.
 
-Ensure `.env` is in your `.gitignore` (covers credential files at any depth).
+A refresh token has a five-year maximum life and rotates on each refresh, so the new value has to be persisted every time. Intuit replaced the old use-it-every-100-days policy in November 2025, and for the accounting scope the first tokens start expiring in October 2028. [`reference/credential-setup.md`](reference/credential-setup.md) carries the dates and the source.
 
-### Token Behavior
+`REFRESH_TOKEN_EXPIRED` means re-authorizing through the OAuth Playground, which needs a QuickBooks company admin. Nothing in the skill can recover it.
 
-**Lazy refresh** — tokens are only refreshed when an API call fails with 401. Refreshed tokens are persisted back to whichever `.env` file was loaded at startup (logged to stderr).
+## Dependencies
 
-**Single source of truth** — when `BOOKKEEPING_CONFIG_PATH` is set, both the QBO skill and bookkeeping adapters read/write the same `.env` file, preventing token drift.
+[`requirements.txt`](requirements.txt) holds the pins.
 
-**Refresh token expiry** — QBO refresh tokens expire after 100 days of non-use. If you see `REFRESH_TOKEN_EXPIRED`, re-authorize at the [OAuth Playground](https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl).
+**A deliberate deviation.** `master-builder`'s convention is that Python dependencies
+are declared inline in each script, as PEP 723 metadata, with no separate list to
+drift. This skill keeps a manifest instead, for two reasons. The import-name trap
+below needs a comment line to live on, and a package list has nowhere to put it. And
+`bookkeeping` puts this skill's `scripts` directory on `sys.path` and imports from it
+at runtime, so the two skills share one environment, which PEP 723's per-script
+isolation does not serve. Ruled 2026-08-16. One manifest, never both.
 
-## Limitations
+**Install by package name, not by import name.** The OAuth client imports as `intuitlib` and ships on PyPI as **`intuit-oauth`**. Installing `intuitlib` fetches an unrelated project, after which `qbo_client.py` sets `QBO_IMPORTS_AVAILABLE = False` and fails closed rather than raising. Install from `requirements.txt`, which carries the mapping.
 
-- **No bank feeds** - QBO API doesn't expose raw bank feed transactions.
-- **Rate limits** - ~500 requests/minute. Scripts include automatic retry with backoff.
-- **Max 1000 results** - Use pagination for larger result sets.
-- **Sequential only** - Don't run parallel queries (token refresh conflicts).
+## Limits
+
+- Bank feeds are not in the API. Raw feed transactions cannot be read through this skill.
+- Intuit rate-limits per realm. The scripts retry with backoff when they are throttled.
+- A query page tops out at 1000 rows. Larger sets need pagination.
+- Run queries one at a time. Two in parallel race on token refresh, and one of them loses its tokens.

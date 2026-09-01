@@ -421,7 +421,7 @@ def publish_payout_consumed_credits(
 ) -> Tuple[int, int, int, List[Dict], List[str]]:
     """Publish payout-keyed settlements that consume a CreditMemo within the payout.
 
-    Design (b), the bank-funded CM-consume fix. A payout-keyed
+    Design (b), the bank-funded CM-consume fix (Tiger Sauce $197.91, SB4U P06). A payout-keyed
     channel (e.g. Shopify) settles a chargeback/return CreditMemo *inside* the payout deposit:
     the payout's invoice-collection TAPs are GROSS (full invoice face) and a separate bank-funded
     CM-consume TAP (parent type=credit_memo) carries the credit. Emit ONE consolidated mixed-Line

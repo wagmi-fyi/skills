@@ -1,21 +1,21 @@
 # Adapter Patterns Reference
 
-Patterns and conventions for adapters and scripts in Bookkeeping. This reference is loaded during adapter-spec (Step 2) and adapter-dev workflows to guide implementation toward Claude-native code.
+Patterns and conventions for adapters and scripts in Bookkeeping. This reference is loaded during adapter-spec (Step 2) and adapter-dev workflows to guide implementation toward agent-first code.
 
 ---
 
 ## The Agent-First Philosophy
 
-**Core principle:** Scripts do one atomic thing. Claude handles everything else.
+**Core principle:** a script does one atomic thing. Everything around it is the calling agent's job.
 
-| Script's Job | Claude's Job |
+| The script's job | The agent's job |
 |--------------|--------------|
 | Execute one operation | Orchestrate multiple operations |
 | Return result or error | Decide what to do with results |
 | Fail loud on problems | Handle errors, decide recovery |
 | Output structured JSON | Parse and act on output |
 
-Scripts are **pure functions with side effects** — they take input, do one thing, and produce structured output. Claude orchestrates them, handles errors, and makes judgment calls.
+Scripts are **pure functions with side effects**: they take input, do one thing, and produce structured output. The agent sequences them, reads the errors, and makes the judgment calls.
 
 ---
 
@@ -171,7 +171,7 @@ import config_loader
 
 ### Database Access Pattern
 
-This skill uses a domain-specific SQLite database:
+This module uses a domain-specific SQLite database:
 
 ```python
 from _shared import config_loader
@@ -212,24 +212,24 @@ Secrets live in `{local_dir}/adapters/.env` (gitignored). Fail fast if missing.
 
 ### 1. Monolithic Workflow Scripts
 
-**Don't** combine multiple steps in one script. If step 4 fails, Claude can't tell where.
+**Don't** combine multiple steps in one script. When step 4 fails, the caller cannot tell which step failed.
 
 ```
 Bad:  create_invoice_and_send.py (gather → calculate → create → push → send → log)
-Good: Separate scripts, Claude orchestrates the sequence
+Good: Separate scripts, the agent sequences them
 ```
 
 ### 2. Built-In Retry Logic
 
-**Don't** add retry/backoff/sleep in scripts. Claude reasons about whether to retry, how long to wait, or whether to try a different approach.
+**Don't** add retry/backoff/sleep in scripts. A script reports the failure and exits. Whether to retry, how long to wait, and whether to take a different route are decisions for the caller, which holds context the script does not.
 
 ### 3. Input Validation Overkill
 
-**Don't** extensively validate arguments. Claude calls these scripts — if it passes bad data, it sees the error and fixes it. Let external APIs validate (e.g., QBO validates account codes).
+**Don't** extensively validate arguments. An agent calls these scripts, not a person typing, so a bad argument comes back as an error the caller reads and corrects. Let the external API validate what it owns; QBO validates account codes, for one.
 
 ### 4. Wrapping Everything in Try/Except
 
-**Don't** swallow errors. Let them fail loud so Claude can see what happened.
+**Don't** swallow errors. A caught-and-hidden error becomes a silent wrong answer. Let it surface, and put enough in the message to say what happened.
 
 **When try/except IS appropriate:**
 - Loop boundaries (catch per-item so the loop continues)
@@ -238,20 +238,20 @@ Good: Separate scripts, Claude orchestrates the sequence
 
 ### 5. Over-Engineering for Edge Cases
 
-**Don't** special-case empty inputs, large batches, priority queues. Write the simple version. Claude handles complexity.
+**Don't** special-case empty inputs, large batches, priority queues. Write the simple version and leave the shape of the work to the caller.
 
-**The test:** "Could Claude handle this error better than my code?" If yes, let it bubble up.
+**The test:** does handling this error need context from outside the script? If it does, let it bubble up.
 
 ---
 
-## Considerations Specific to This Skill
+## Module-Specific Considerations
 
 ### Quality Gates
 
 Every workflow must define pass/fail criteria for its output. When speccing an adapter, ask:
 
 - **Does this adapter's output need a quality gate?** (e.g., "local balance must match statement balance")
-- **Is the quality gate a check within the script** (validation logic) **or a separate verification step** (a follow-up script or Claude check)?
+- **Is the quality gate a check within the script** (validation logic) **or a separate verification step** (a follow-up script, or a check the agent performs)?
 - Quality gates are **mandatory at the workflow level**, encouraged at the step level.
 
 ### Workpapers
@@ -267,7 +267,7 @@ Workpapers are state artifacts that persist context across sessions. When specci
 If the adapter touches the database:
 
 - **Does it need new tables or columns?** Update `reference/module/schema.sql`
-- **Is the database staging or SoR?** This skill uses staging — SQLite is workspace, external SoR is destination
+- **Is the database staging or SoR?** This module uses staging — SQLite is workspace, external SoR is destination
 - Schema is self-contained, applied independently
 
 ### Content Slot Pattern
@@ -288,11 +288,50 @@ If it does not exist, use this default:
 | Use Script When | Use Markdown When |
 |----------------|-------------------|
 | External APIs, database ops | Reference docs, decision frameworks |
-| File operations with side effects | Step-by-step instructions Claude follows |
+| File operations with side effects | Step-by-step instructions the agent follows |
 | Credential requirements | Informational knowledge |
 | Structured JSON output needed | |
 
-**The test:** "Does this need to *do* something with side effects, or *inform* Claude's decisions?"
+**The test:** does this *do* something with side effects, or *inform* a decision the agent makes?
+
+---
+
+## The System-of-Record Seam
+
+The SoR is the external ledger staging publishes into. Which one is in play is **declared** in config as `default_system_of_record` — never detected from the environment, never inferred from which adapter happens to be installed. That value is also the `{sor}` token the publish-adapter resolution uses. An empty declaration defaults to QBO and says so; `config_loader.get_sor()` applies this for scripts.
+
+### The contract is the staging schema, not a bundle
+
+An SoR adapter reads and writes the same SQLite staging tables every other part of the module uses. There is **no handoff bundle** — no export file, no intermediate payload, no serialized batch passed between the core and the adapter. The seam is the schema:
+
+- **`sync` (JSON)** on `journal_entries`, `trade_accounts`, `trade_account_payments` — `{status, external_id, error, last_synced_at}`. `status` is the state machine: `pending` → `synced`, or `error`, or `verify`. `verify` means the object's posted state is *unknown*; no re-publish selects it, so a lost race cannot become a double-post. See `adapters/qbo/_shared/sync_status.py`.
+- **`remote_id`** on the reference tables (chart of accounts, contacts, classes) — the SoR's identifier for a record that exists on both sides.
+
+Because the contract is table state, an adapter is resumable by construction and two adapters cannot disagree about what "published" means.
+
+### An SoR adapter is bidirectional
+
+Publishing is half of it. The adapter also reads the SoR back, and the close depends on those reads:
+
+- **Out:** the publish entry point maps staging records to SoR objects and records their external IDs.
+- **In, reference data:** the `sync_*` entry points pull the chart of accounts, classes, and contacts so staging codes resolve to real SoR identifiers.
+- **In, verification:** an as-of trial-balance tie and a direct-record scan bracket the period. The SoR is not a write-only mirror — it holds records staging never created (entered directly, system-generated, or a prior sync that failed to land). Both brackets are Hard Stops in `reference/quality-guidelines.md`.
+
+An adapter that only publishes is not an SoR adapter. It cannot close a period.
+
+### Transaction ingest is not the SoR's job
+
+Bank and processor transactions enter through **feed adapters** (the flat modules in `adapters/`), not through the SoR adapter — even when the SoR could serve some of that data. The two classes have different contracts: a feed adapter writes `imports` rows deduplicated on `(source, external_id)` and never publishes; an SoR adapter never ingests source transactions. Keeping the split means the SoR can change without touching how data arrives.
+
+### Landing a second SoR
+
+The seam is already SoR-agnostic; a second one (Xero, say) is an adapter directory, not a refactor. What it touches:
+
+- A new adapter directory under `adapters/{sor}/` supplying the same entry points — publish, reference sync, as-of reconcile, direct-record scan — plus its own `gotchas.md`.
+- `default_system_of_record` in the client's config, which resolves the publish adapter through the six-layer order in `operations/process-period.md`.
+- Its own dependency block in `requirements.txt`, adapter-tier like the QBO block, and its tests guarded on that SDK so a deployment without it still runs a green core suite.
+
+What it does **not** touch: the staging schema, the sync-status vocabulary, the core scripts, or the feed adapters. If landing an SoR requires changing those, the seam has been breached and the design is wrong — stop rather than widen the core.
 
 ---
 

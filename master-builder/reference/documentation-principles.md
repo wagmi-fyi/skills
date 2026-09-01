@@ -21,3 +21,9 @@ All skill content — SKILL.md, operations, references, templates — follows th
 **Resolver-managed invocation.** Any command written for someone else to run invokes scripts through the ecosystem's resolver (`uv run` for Python, for example) — never a bare interpreter or package tool, which may not resolve on the reader's machine. Shebangs are exempt.
 
 **Token economy.** Fewest words without corrupting intent. No filler, no redundant headers, no summaries of what the reader just read.
+
+**Plain register.** Write for the spoken voice. State each idea once, in one short sentence, and let the fact carry the weight. Use the everyday word over the domain term; define a term of art at first use or drop it. Vary sentence length.
+
+Do not use: em dashes; antithesis or corrective negation ("X, not Y"); contrasting pairs; rules of three; parallel sentence structures within a paragraph; setup and payoff constructions; landing sentences; summary beats; negative parallelisms; stacked noun phrases; nominalization; hedging qualifiers; filler intensifiers; performed enthusiasm. A sentence that dramatizes a fact is hiding it.
+
+When this register conflicts with an existing file's voice, the register wins for new prose. A legacy file converges as its sentences are touched. Do not run a dedicated rewrite sweep.
