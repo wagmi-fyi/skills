@@ -3,8 +3,8 @@
 When a design crossroads is **complex, meaty, or visual/UI**, don't escalate it as a wall of text — **render it.** A good brief lets the human rule in seconds instead of minutes. This is the high-fidelity tier of the crossroads contract (`human-in-the-loop.md`).
 
 ## When (scale fidelity to the decision's weight)
-- **Trivial** (binary, obvious-once-stated) → chat text, or a quick `AskUserQuestion`.
-- **Complex / meaty / UI / visual / multi-option-with-real-trade-offs** → a **decision brief**: an HTML file written to `/tmp/<slug>.html`, opened with `scripts/present`, paired with `scripts/notify` + pause-the-unit + a bus-inbox pointer.
+- **Trivial** (binary, obvious-once-stated) → plain text in the queue file the human reads.
+- **Complex / meaty / UI / visual / multi-option-with-real-trade-offs** → a **decision brief**: an HTML file published where the human's own machine can open it, paired with pause-the-unit, a queue entry, and a bus pointer.
 
 ## Two modes
 1. **Interactive mockup** (UI / visual choices) — render each option as **real UI** in one file with a control bar to **toggle between options**, and a short note framing the trade-off. Let the human see the actual thing, not a description of it.
@@ -20,11 +20,11 @@ When a design crossroads is **complex, meaty, or visual/UI**, don't escalate it 
 - A clear **how-to-choose** affordance ("reply A / B, or tell me to adjust").
 
 ## Capture — available, not default, never forbidden
-Default is **illustrate-only**: the human rules in chat or the paused pane. No hard "never capture" rule — if a decision is high-value enough that closing the loop in-browser clearly pays, an agent may serve the brief from a tiny local http listener whose buttons write the choice back to the bus and auto-resume the unit. Weigh cost/benefit; reach for it only when it earns its keep.
+Default is **illustrate-only**: the human rules in chat or in the queue file. No hard "never capture" rule — if a decision is high-value enough that closing the loop in the browser clearly pays, an agent may serve the brief from a listener whose buttons write the choice back to the bus and resume the unit. That only works if the human's browser can actually reach the listener, which on a remote host it usually cannot. Weigh cost/benefit; reach for it only when it earns its keep.
 
 ## Flow
-1. Write the brief to `/tmp/<slug>.html` — in a look that fits the project (or modern/clean if none).
-2. `scripts/present /tmp/<slug>.html` — opens it in the browser.
-3. `scripts/notify "<decision>" "<one line + your rec>"` **+ pause the unit**.
-4. `bus send <you> <human-handle> "crossroads: <decision>" "see the brief" --ref /tmp/<slug>.html`.
+1. Build the brief in a look that fits the project (or modern/clean if none).
+2. **Put it where the human can open it.** The runbook says whether this machine has a browser they are actually in front of. If it doesn't, publish where they already look: a directory their own machine opens, or a published artifact. A file on a host they are not sitting at is a file they cannot see, and the run gets no signal that they never saw it.
+3. **Pause the unit.**
+4. `bus send <you> human "crossroads: <decision>" "see the brief" --ref <published location>`, add the Q-numbered entry to the queue file, and raise it on the live reach the runbook names.
 5. Resume on the ruling; record the decision + rationale in the workpaper journal.

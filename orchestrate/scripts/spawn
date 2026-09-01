@@ -1,29 +1,286 @@
 #!/usr/bin/env bash
-# orchestrate/spawn — open a VISIBLE tmux pane running a delegate session.
+# orchestrate/spawn — start a delegate session on the configured substrate.
 # Usage: spawn <handle> [initial-instruction]
-# The orchestrator should `bus send` the unit's assignment BEFORE spawning.
+#        spawn --check            resolve settings, detect the substrate, prove
+#                                 its mechanism is present; spawn nothing
+#
+# One act, one branch per substrate. The core operations call this script and
+# never the mechanism inside it; reference/substrates/<name>.md documents what
+# each branch does and what the human sees.
+#
+# The orchestrator `bus send`s the unit's assignment BEFORE spawning: the
+# delegate's first act is to read its own inbox, so the message has to be there.
+#
+# Every setting resolves in one order: the environment, then the machine conf
+# ($ORCHESTRATE_CONF, default /etc/orchestrate.conf), then the shipped
+# config.yaml. A deployment that keeps its config somewhere else points
+# $ORCHESTRATE_CONF at it. Under a managed install the skill folder is
+# root-owned, so config.yaml is the layer a local ruling cannot be written into.
+#
+# Output: JSON on stdout. Progress and failures go to stderr.
+# Exit: 0 ok / 1 the spawn failed / 2 no branch for that substrate
+#       3 substrate mismatch — the mechanism is absent here
 set -euo pipefail
-HANDLE="${1:?usage: spawn <handle> [initial-instruction]}"
+
 SKILL="$(cd "$(dirname "$0")/.." && pwd)"
 BUS="$SKILL/scripts/bus"
+CONF="$SKILL/config.yaml"
+MACHINE_CONF="${ORCHESTRATE_CONF:-/etc/orchestrate.conf}"
 
-if [ -z "${TMUX:-}" ]; then
-  echo "not inside tmux — cannot open a visible pane." >&2
-  echo "run the orchestrator inside tmux (tmux new -s orch), or set spawn_mode: manual." >&2
-  exit 1
+# --- settings ---------------------------------------------------------------
+
+# One `key: value` (yaml) or `KEY=value` (conf) line, quotes and trailing
+# comment removed. Returns 1 when the file is unreadable or the key is unset.
+read_setting() {
+  [ -r "$1" ] || return 1
+  local raw
+  raw="$(sed -nE "s/^[[:space:]]*$2[[:space:]]*[:=][[:space:]]*(.*)$/\1/p" "$1" 2>/dev/null | head -1)"
+  [ -n "$raw" ] || return 1
+  raw="${raw%%#*}"
+  raw="$(printf '%s' "$raw" | sed -E "s/^[[:space:]]+//; s/[[:space:]]+$//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/")"
+  [ -n "$raw" ] || return 1
+  printf '%s' "$raw"
+}
+
+# setting <config.yaml key> <value-var> <source-var> — assigns both, so the
+# origin survives (a command substitution would resolve it in a subshell and
+# lose it). The conf file names its keys exactly as the environment does, so
+# one name serves both shell-side layers.
+setting() {
+  local key="$1" envname val
+  envname="ORCHESTRATE_$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')"
+  if [ -n "${!envname:-}" ]; then
+    printf -v "$2" '%s' "${!envname}"; printf -v "$3" '%s' "environment:$envname"; return 0
+  fi
+  if val="$(read_setting "$MACHINE_CONF" "$envname")"; then
+    printf -v "$2" '%s' "$val"; printf -v "$3" '%s' "$MACHINE_CONF"; return 0
+  fi
+  if val="$(read_setting "$CONF" "$key")"; then
+    printf -v "$2" '%s' "$val"; printf -v "$3" '%s' "config.yaml"; return 0
+  fi
+  printf -v "$2" '%s' ""; printf -v "$3" '%s' "unset"
+}
+
+setting substrate                 SUBSTRATE  SUBSTRATE_SRC
+setting delegate_model            MODEL      MODEL_SRC
+setting delegate_skip_permissions SKIP_RAW   SKIP_SRC
+setting spawn_mode                SPAWN_MODE SPAWN_MODE_SRC
+setting bus_dir                   BUS_DIR    BUS_DIR_SRC
+
+# The bus a delegate joins is decided here and handed over as a value. A boot
+# line that told the delegate to fall back on $SESSION_BUS_DIR handed the
+# choice to whatever the machine exports, and a machine-wide export of that
+# name put five delegates on a bus their orchestrator was not reading. So the
+# seam answers it once and every rail below carries the same answer.
+[ -n "$BUS_DIR" ] || { BUS_DIR="$HOME/.claude/session-bus"; BUS_DIR_SRC="the bus default"; }
+BUS_DIR="${BUS_DIR/#\~/$HOME}"
+export SESSION_BUS_DIR="$BUS_DIR"
+
+SKIP=""
+case "$(printf '%s' "$SKIP_RAW" | tr '[:upper:]' '[:lower:]')" in
+  true|yes|1) SKIP="--dangerously-skip-permissions" ;;
+esac
+
+# --- substrate detection ----------------------------------------------------
+
+# A substrate is usable only where its mechanism is present. Prove it before
+# using it: a generic failure at spawn time reads as an obstacle to work around.
+mechanism_present() {
+  case "$1" in
+    claude) command -v claude >/dev/null 2>&1 && claude --help 2>/dev/null | grep -q -- '--bg' ;;
+    tmux)   [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1 && command -v claude >/dev/null 2>&1 ;;
+    *)      return 1 ;;
+  esac
+}
+
+mechanism_reason() {
+  case "$1" in
+    claude)
+      command -v claude >/dev/null 2>&1 \
+        || { echo "the claude CLI is not on PATH, so no background agent can start"; return; }
+      echo "the claude CLI on PATH has no --bg, so it cannot start a background agent" ;;
+    tmux)
+      [ -n "${TMUX:-}" ] \
+        || { echo "this session is not inside tmux (\$TMUX unset), so there is no server to open a pane in"; return; }
+      command -v tmux >/dev/null 2>&1 \
+        || { echo "the tmux binary is not on PATH"; return; }
+      echo "the claude CLI is not on PATH, so a pane has nothing to run" ;;
+    *) echo "no runbook under reference/substrates/ claims this name" ;;
+  esac
+}
+
+mechanism_fix() {
+  case "$1" in
+    claude) echo "install or upgrade the claude CLI here, or select a substrate whose mechanism IS present" ;;
+    tmux)
+      [ -n "${TMUX:-}" ] \
+        && echo "put the missing binary on PATH, or select a substrate whose mechanism IS present" \
+        || echo "run the ORCHESTRATOR ITSELF inside tmux (tmux new -s orch) and spawn from there, or select a substrate whose mechanism IS present" ;;
+    *)      echo "set the substrate to one with a runbook under reference/substrates/" ;;
+  esac
+}
+
+# Every substrate whose mechanism is present here, most portable first. The
+# claude branch works with or without a multiplexer, so it leads. tmux is
+# chosen deliberately, for visible panes, never by the accident of a session
+# happening to sit in one.
+AVAILABLE=""
+for s in claude tmux; do
+  mechanism_present "$s" && AVAILABLE="${AVAILABLE:+$AVAILABLE }$s"
+done
+DETECTED="${AVAILABLE%% *}"
+
+json_env() {
+  printf '{"detected":"%s","available":"%s","substrate":"%s","substrate_source":"%s","spawn_mode":"%s","spawn_mode_source":"%s","delegate_model":"%s","delegate_model_source":"%s","delegate_skip_permissions":"%s","delegate_skip_permissions_source":"%s","bus_dir":"%s","bus_dir_source":"%s","machine_conf":"%s","tmux":"%s","claude_cli":"%s","mechanism":"%s"}\n' \
+    "${DETECTED:-none}" "${AVAILABLE:-none}" \
+    "${SUBSTRATE:-none}" "$SUBSTRATE_SRC" \
+    "${SPAWN_MODE:-none}" "$SPAWN_MODE_SRC" \
+    "${MODEL:-inherited}" "$MODEL_SRC" \
+    "${SKIP_RAW:-none}" "$SKIP_SRC" \
+    "$BUS_DIR" "$BUS_DIR_SRC" \
+    "$([ -r "$MACHINE_CONF" ] && echo "$MACHINE_CONF" || echo absent)" \
+    "$([ -n "${TMUX:-}" ] && echo set || echo unset)" \
+    "$(command -v claude 2>/dev/null || echo absent)" \
+    "$1"
+}
+
+# A substrate this host cannot run is a wall. The run stops and reports it.
+refuse_mismatch() {
+  local want="$1"
+  {
+    echo "SUBSTRATE MISMATCH: '$want' cannot spawn on this host."
+    echo "  reason:   $(mechanism_reason "$want")"
+    echo "  detected: present here = ${AVAILABLE:-none} | \$TMUX $([ -n "${TMUX:-}" ] && echo set || echo unset) | claude CLI $(command -v claude 2>/dev/null || echo absent)"
+    echo "  selected: '$want' came from $SUBSTRATE_SRC"
+    echo "  fix:      $(mechanism_fix "$want"). Or set spawn_mode to manual and have"
+    echo "            the human open the session; it is reachable once it lists."
+    echo
+    echo "This is a wall. Stop and report it. Do not point this spawn at another"
+    echo "session, pass the missing mechanism in by flag, or record a deviation and"
+    echo "proceed. The harness's in-process subagent tool is not a substrate: it is"
+    echo "not human-reachable and never appears in the session listing, so no unit"
+    echo "that mutates state or produces a deliverable runs there. Read the listing"
+    echo "to confirm where a delegate is visible; never assert it. See"
+    echo "reference/substrate.md."
+  } >&2
+}
+
+# --- preflight only ---------------------------------------------------------
+
+if [ "${1:-}" = "--check" ]; then
+  if [ -z "$SUBSTRATE" ]; then
+    if [ -z "$DETECTED" ]; then
+      json_env absent
+      echo "no substrate is declared and none is present here. Read reference/substrate.md and ask the human." >&2
+      exit 3
+    fi
+    json_env present
+    echo "no substrate declared; detection says '$DETECTED'. Record it in the workpaper before the first spawn." >&2
+    exit 0
+  fi
+  if mechanism_present "$SUBSTRATE"; then
+    json_env present
+    echo "substrate '$SUBSTRATE' (from $SUBSTRATE_SRC) can spawn here." >&2
+    exit 0
+  fi
+  json_env absent
+  refuse_mismatch "$SUBSTRATE"
+  exit 3
 fi
-command -v claude >/dev/null || { echo "claude CLI not found on PATH" >&2; exit 1; }
 
-INIT="${2:-You are the orchestrate delegate '$HANDLE'. Bootstrap in this order: (1) invoke the /orchestrate skill, 'delegate' operation, to load your contract + method; (2) the bus CLI is at ~/.claude/skills/orchestrate/scripts/bus and is NOT on PATH — call it by that full path: '~/.claude/skills/orchestrate/scripts/bus init $HANDLE --pane \$TMUX_PANE --role worker' then '~/.claude/skills/orchestrate/scripts/bus inbox $HANDLE'; (3) your inbox carries a --ref pointer to your full prompt — read that file and execute it. Stay in this pane — the human can reach you here.}"
+# --- spawn ------------------------------------------------------------------
 
-# opt-in: launch delegates with --dangerously-skip-permissions so they don't stall on prompts (config: delegate_skip_permissions)
-FLAGS=""
-if grep -Eqi '^[[:space:]]*delegate_skip_permissions:[[:space:]]*true' "$SKILL/config.yaml" 2>/dev/null; then
-  FLAGS="--dangerously-skip-permissions "
+HANDLE="${1:?usage: spawn <handle> [initial-instruction]  |  spawn --check}"
+
+# A handle beginning with a dash is a flag that reached the wrong argument.
+# Proven here: a caller passed a flag this script did not yet have, and it
+# spawned a live agent named for the flag, with the generic boot instruction
+# and no charter. A spawn creates a session and a bus handle, so it refuses.
+case "$HANDLE" in
+  -*)
+    echo "REFUSED: '$HANDLE' begins with a dash, so it is a flag, not a handle." >&2
+    echo "  Nothing was spawned. This is what a flag the installed version does not" >&2
+    echo "  have looks like when it reaches the handle argument. This copy offers" >&2
+    echo "  --check; an older one does not. Check the version you are calling." >&2
+    exit 2 ;;
+esac
+if [ -z "$SUBSTRATE" ]; then
+  SUBSTRATE="$DETECTED"
+  SUBSTRATE_SRC="detection"
 fi
+[ -n "$SUBSTRATE" ] || { refuse_mismatch none; exit 3; }
 
-# new visible window named for the handle; keep a shell after claude exits so the pane persists
-PANE=$(tmux new-window -P -F '#{pane_id}' -n "$HANDLE" "claude ${FLAGS}$(printf '%q' "$INIT"); exec \${SHELL:-/bin/sh}")
-# pre-register the pane so push-wake works immediately (delegate also self-registers on bus init)
-"$BUS" init "$HANDLE" --pane "$PANE" --role worker >/dev/null 2>&1 || true
-echo "spawned delegate '$HANDLE' in pane $PANE  (Ctrl-b + window number to view)"
+case "$SUBSTRATE" in
+  claude|tmux) mechanism_present "$SUBSTRATE" || { refuse_mismatch "$SUBSTRATE"; exit 3; } ;;
+  *)
+    echo "no spawn branch for substrate '$SUBSTRATE' (from $SUBSTRATE_SRC)." >&2
+    echo "set it to one with a runbook under reference/substrates/." >&2
+    exit 2 ;;
+esac
+
+case "$SUBSTRATE" in
+
+  claude)
+    # A background agent: returns immediately, appears in the agent view, and the
+    # human can open it and take it over. It registers with no pane.
+    # The boot contract is always sent. A caller's instruction appends to it,
+    # never replaces it, so one optional argument cannot strip the rules a
+    # delegate must hold.
+    BOOT="You are the orchestrate delegate '$HANDLE'. Bootstrap in this order: (1) invoke the orchestrate skill, 'delegate' operation, to load your contract + method; (2) the bus CLI is at $BUS and is NOT on PATH, and shell state does not persist between your tool calls, so call it by that full path and set SESSION_BUS_DIR on every invocation, to this exact path: 'SESSION_BUS_DIR="$BUS_DIR" $BUS init $HANDLE --pane - --role worker' then the same form with 'inbox $HANDLE'. That path is your bus. Do not substitute what the environment already holds under that name; (3) your inbox carries a --ref pointer to your full prompt — read that file and execute it. Stay in this session: the human reaches you through the agent view. Work that mutates state or produces a deliverable runs in THIS session, never in an in-process subagent. A wall — a spec that breaks, a mechanism that is absent — gets reported, never routed around. Your final report is undelivered until BOTH legs complete: the bus record, and a wake to your orchestrator on this substrate's wake channel. Here that wake is a peer message to the orchestrator's session: '$BUS whois <orchestrator-handle>' prints the send address in its 'address' field; when that field is empty, use the name the agent listing prints for the session whois names. A refused, unresolvable, or held-then-expired send is a wall: record it on the bus and stay parked; never let the bus record stand alone."
+    INIT="$BOOT"
+    [ -n "${2:-}" ] && INIT="$BOOT
+
+Additional instruction from your orchestrator: $2"
+
+    FLAGS=()
+    [ -n "$MODEL" ] && FLAGS+=(--model "$MODEL")
+    [ -n "$SKIP" ] && FLAGS+=("$SKIP")
+
+    # Pre-register so the handle resolves before the delegate's own init lands.
+    # --name below makes the listing print the handle, so the handle is also
+    # the send address, recorded here for bus whois.
+    "$BUS" init "$HANDLE" --pane - --role worker --address "$HANDLE" >/dev/null 2>&1 || true
+
+    # --name makes the session's listed name the handle, so one name addresses it
+    # on both rails. The delegate inherits this cwd; spawn from the repo root.
+    OUT="$(claude --bg --name "$HANDLE" "${FLAGS[@]}" "$INIT" 2>&1)" || {
+      printf '%s\n' "$OUT" >&2; echo "spawn failed for '$HANDLE'" >&2; exit 1; }
+
+    # "backgrounded · <id>", ANSI-coloured.
+    AGENT_ID="$(printf '%s' "$OUT" | sed -E 's/\x1b\[[0-9;]*m//g' | sed -nE 's/^backgrounded[^a-z0-9]+([a-z0-9]+).*$/\1/p' | head -1)"
+    if [ -z "$AGENT_ID" ]; then
+      printf '%s\n' "$OUT" >&2
+      echo "spawned, but could not read the agent id — find it with: claude agents --json" >&2
+      exit 1
+    fi
+
+    printf '{"substrate":"claude","handle":"%s","agent_id":"%s","address":"%s","cwd":"%s","model":"%s","substrate_source":"%s"}\n' \
+      "$HANDLE" "$AGENT_ID" "$HANDLE" "$PWD" "${MODEL:-inherited}" "$SUBSTRATE_SRC"
+    echo "spawned '$HANDLE' (agent $AGENT_ID). Address it by the name the listing prints. Human: claude attach $AGENT_ID" >&2
+    ;;
+
+  tmux)
+    # A visible pane the human switches into. Field-proven machinery; the shape
+    # below is preserved from the substrate this skill was first written on.
+    # Boot contract always sent; a caller's instruction appends, never replaces.
+    BOOT="You are the orchestrate delegate '$HANDLE'. Bootstrap in this order: (1) invoke the orchestrate skill, 'delegate' operation, to load your contract + method; (2) the bus CLI is at $BUS and is NOT on PATH — call it by that full path, and set SESSION_BUS_DIR on every invocation, to this exact path: 'SESSION_BUS_DIR="$BUS_DIR" $BUS init $HANDLE --pane \$TMUX_PANE --role worker' then the same form with 'inbox $HANDLE'. That path is your bus. Do not substitute what the environment already holds under that name; (3) your inbox carries a --ref pointer to your full prompt — read that file and execute it. Stay in this pane — the human can reach you here. Work that mutates state or produces a deliverable runs in THIS session, never in an in-process subagent. A wall — a spec that breaks, a mechanism that is absent — gets reported, never routed around. Your final report is undelivered until BOTH legs complete: the bus record, and a wake on this substrate's wake channel — your runbook (reference/substrates/tmux.md) names it. A wake you cannot deliver is a wall: record it on the bus and stay parked."
+    INIT="$BOOT"
+    [ -n "${2:-}" ] && INIT="$BOOT
+
+Additional instruction from your orchestrator: $2"
+
+    FLAGS=""
+    [ -n "$SKIP" ] && FLAGS="$SKIP "
+    [ -n "$MODEL" ] && FLAGS="${FLAGS}--model ${MODEL} "
+
+    # new visible window named for the handle; keep a shell after claude exits so the pane persists
+    PANE=$(tmux new-window -P -F '#{pane_id}' -n "$HANDLE" "claude ${FLAGS}$(printf '%q' "$INIT"); exec \${SHELL:-/bin/sh}")
+    # pre-register the pane so push-wake works immediately (delegate also self-registers on bus init)
+    "$BUS" init "$HANDLE" --pane "$PANE" --role worker >/dev/null 2>&1 || true
+
+    printf '{"substrate":"tmux","handle":"%s","pane":"%s","address":"%s","cwd":"%s","model":"%s","substrate_source":"%s"}\n' \
+      "$HANDLE" "$PANE" "$HANDLE" "$PWD" "${MODEL:-inherited}" "$SUBSTRATE_SRC"
+    echo "spawned delegate '$HANDLE' in pane $PANE  (Ctrl-b + window number to view)" >&2
+    ;;
+
+esac
