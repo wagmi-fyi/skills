@@ -95,7 +95,23 @@ def probe():
             "reason": "no socket directory at %s. A session must be running, and it must "
                       "belong to this account" % kd,
         }
+    # PRESENCE IS THE SOCKET COUNT, NEVER THE DIRECTORY. This answered True
+    # whenever both directories existed and used the count only to fill the
+    # reason string, so an account that signed in once kept its cc-socks
+    # directory and read `ready` from then on, with nobody there. Measured on
+    # a multi-account machine on 2026-09-02: `present: true` beside `0 session
+    # socket(s)`. The idle state the core resolves is what waits for somebody
+    # to arrive, and a false `ready` skips it. The never-signed-in case is the
+    # directory being absent, which is answered above and is a different
+    # sentence.
     live = [f for f in os.listdir(kd) if f.endswith(".sock")]
+    if not live:
+        return {
+            "substrate": "claude",
+            "present": False,
+            "reason": "no session sockets under %s. The directory is here, so this "
+                      "account has signed in before and nobody is signed in now" % kd,
+        }
     return {
         "substrate": "claude",
         "present": True,
