@@ -78,6 +78,36 @@ The durable record is the `human` bus handle and the queue file beside the workp
 - **`scripts/desktop-wake <handle>`** emits one line per new bus message on stdout for the harness's background-watch primitive. Run it under that primitive, persistently, never detached. `--check` first: it catches an overridden `HOME` resolving to a private empty bus where every send still succeeds, and it refuses an uninitialized bus directory, which reads exactly like a quiet healthy one.
 - Set `SESSION_BUS_DIR` on every invocation, to the path the spawn instruction names. An agent's shell state does not survive between tool calls, and a machine-wide export of that name wins any fallback a boot line leaves open.
 
+### Wake delivery — the rail that pokes a session nobody is watching
+
+The bullets above are what a session does for a peer while it is running. The
+standing rail is `scripts/bus-nudge`, which runs outside every session, watches
+the buses on the machine, and tells a live session that it has unread mail. On
+this substrate its delivery adapter writes one turn into the target's own
+socket, so the poke arrives without anybody looking.
+
+**It delivers one fixed sentence and never anything else.** The sentence names a
+bus directory. It carries no subject, no sender and no body, so a session that
+receives one reads its own inbox, and the inbox is what it acts on. Run
+`bus-nudge --law` to see the sentence and prove it. This is why the rail is safe
+to run unattended: a wrong or stale nudge costs a turn and cannot inject work.
+
+**Every session opts in through the machine's managed settings.** A session
+holds a message from a sender that cannot attest its permission mode, and the
+rail has no screen to answer the approval prompt on. The opt-in is
+`crossSessionInbound`, set once for the machine; a repository may tighten it,
+and a session started inside one that does is refused before anything is sent.
+
+**It refuses a session that has ended and never resumes one.** A resume forks:
+it makes a second copy under a new process and a new session id, and the
+original stays dead. So an idle-exited target is a gap this rail does not close,
+which is what the heartbeat below is now for.
+
+`bus-nudge --check` reports the adapter it resolved and the pids of any watcher
+already running for this account. Where the rail runs as a machine service, the
+deployment that installed it puts its own reference beside it, and that file says
+how it is stood up.
+
 ### What kills the watcher, and how you find out
 
 The watcher is a process under a watch primitive that is itself bound to the session that armed it. It goes away when the session ends, when the watch is stopped, when a non-persistent watch hits its deadline, and when the primitive stops a watcher for emitting too much. None of those is a fault the watcher can see coming.
@@ -86,7 +116,9 @@ The watcher is a process under a watch primitive that is itself bound to the ses
 
 An *attended* run with no wake armed still works; `bus handles` unread counts are the truth in every configuration. The cost is latency.
 
-## The heartbeat — the standing wake for an unattended stretch
+## The heartbeat — the slow backstop under the wake rail
+
+The wake rail above carries the fast path, and it reaches only sessions that are still running. The heartbeat covers what it cannot: a target that idle-exited, a rail that is off, a bus nobody is watching. So its interval is now the worst case of a **missed** wake rather than of every wake, and it can be slow.
 
 The recurring path here is a **scheduled prompt against the orchestrator's own session**, running `run.md`'s beat: read the board from the JSON, drain the inbox, act on what it finds, say nothing when the board is quiet. Its interval is the worst case a lost wake costs, so set it against how long the human will be away.
 
@@ -102,7 +134,9 @@ A delegate that finished stays parked and reachable, and it costs nothing to run
 
 **What it costs is board legibility, and the bill is real.** A unit that ends cleanly reaches `done` and drops out of the default listing once its process goes. A unit that ends any other way, killed, abandoned mid-turn, or parked on a question nobody answered, never reaches a completed state and stays in the default listing under `blocked` for as long as the harness keeps records. On the machine this was measured on that was 27 of 40 rows. Read the board by `pid` and they cost nothing; read it by `state` and they bury the live ones.
 
-**The orchestrator can close one.** The harness's stop-a-background-task verb takes a background agent's name. Against a name it does not hold it refuses out loud: "No task found with ID". Use it on your own spent delegates when the board is getting hard to read, not as routine hygiene. There is no verb for this on the agent CLI, and stopping a session somebody else spawned has not been driven here.
+**The orchestrator can close one, and the agent CLI has the verbs.** `claude stop <id>` stops a background session and destroys nothing: the conversation is kept, `claude attach <id>` reopens it, `claude --resume` still works, and the worktree stays. What it changes is the board, moving the row from `blocked` to `stopped` and off the default listing, which is how a dead `blocked` row is cleared. `claude rm <id>` is the destructive counterpart: it deletes the session's job state and its worktree, and it works on a session that has already exited. Sessions another orchestrator spawned stop cleanly; the harness's own stop-a-background-task verb takes a background agent's name and refuses one it does not hold ("No task found with ID"). `claude attach`, `claude logs` and `claude respawn` are the rest of the family.
+
+**Two things about `rm` that only show up when you drive it.** Its guard tests whether the worktree has been pushed to a remote, not whether it is merged, so on a machine whose repositories have no remote it refuses every worktree and the destructive half never fires; the sequence that works is `git worktree remove` first, then `claude rm` for the job state. And a worktree is job state only when the session's own record names it, so a session that took its own lane at a repo root records none, and `rm` never reaches that directory.
 
 ## Recover a session after a restart
 
@@ -111,11 +145,12 @@ A delegate that finished stays parked and reachable, and it costs nothing to run
 ## What fails silently here
 
 - **`scripts/notify` and `scripts/present` reach nobody and still exit 0** when the box has no desktop session. Re-driven on this host, which has no display and none of the five notifier or opener binaries: `notify` prints one line into a void; `present` prints a `file://` path naming a machine the human is not sitting at, under the word "presented". **Do not use either on this substrate.**
-- **`scripts/bus-watch.sh` cannot deliver here.** It pokes a registered tmux pane; no session has one. Undeliverable rather than misconfigured, so no watcher debugging fixes it.
+- **The tmux adapter of the wake rail cannot deliver here.** It pokes a registered pane; no session on this substrate has one. Undeliverable rather than misconfigured, so no adapter debugging fixes it. `bus-nudge` names the substrate it refuses on.
 - **A blocked delegate looks finished, and a dead one looks blocked.** See the board section. `state` is the last thing that happened, so a session that died while blocked reads as one waiting for you. This is the silent failure that costs the most, and `pid` is what settles it.
 - **A wake delivered to the wrong session reports into a void, and both legs look done.** A name that does not resolve is refused out loud. A name that resolves to the wrong live session is not: the message lands, the sender sees success, and the intended reader never hears anything. Measured on a run whose first wake leg went to a stranger, and it surfaced only because that stranger chose to answer. Person-shaped recovery, not a mechanism.
 - **A `bus send` to a mistyped handle succeeds and queues forever.** It is the same output as the intended case of sending a charter before its delegate exists. See `session-bus.md`.
 - **A dead `desktop-wake` is indistinguishable from a quiet bus.** It announces every exit it can catch and cannot catch a kill. `--check <handle>` reports whether a watcher is running; nothing else does.
+- **A stopped wake rail and a quiet bus look the same.** Nothing announces that the rail went down, and a run whose reports were arriving by themselves keeps waiting as if they still are. `bus-nudge --check` reports the pids of any watcher running for this account; where it runs as a machine service, the service manager's own status verb answers it. Silence is not health here either.
 - **A session's log dump is a terminal capture**, control codes and spinner frames included. It reads a session's state badly and is no substitute for the evidence its bus report cites.
 - **A wake to an idle interactive session sits in its queue.** The send reports delivered, and the message waits for whoever sits at that keyboard to type again, so delivery and processing are separate steps here. A peer orchestration sent both legs correctly and reached nobody this way; the backstop is the stall rail, which watches orchestrator handles for unread mail past its threshold and posts when it finds some.
 - A peer send from a session in a broader permission class than its recipient reports success and is then held for the recipient user's approval; an unapproved hold expires and the message never lands. Delegates spawned with permissions bypassed hit this against any orchestrator running a stricter mode, which is the pairing `delegate_skip_permissions` produces by default. The sender receives delivery notices for the hold and the expiry: treat them as a failed wake and record the failure on the bus.

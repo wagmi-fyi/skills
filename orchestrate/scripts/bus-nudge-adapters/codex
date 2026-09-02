@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""bus-nudge delivery adapter -- codex. THE CONTRACT, UNIMPLEMENTED.
+
+This file exists so that the shape of the work is written down and so that a
+machine which selects this substrate is refused out loud rather than nudging
+nobody in silence. It delivers nothing and it never will until somebody writes
+the three answers below.
+
+THE ADAPTER CONTRACT, WHICH EVERY ADAPTER HERE ANSWERS AND NONE MAY WIDEN:
+
+  1. Deliver the fixed text, verbatim, to a live consenting session.
+  2. Refuse the dead without resurrecting them.
+  3. Fail loudly when the transport changes.
+
+  adapter probe     {} on stdin -> {"substrate","present","reason"}
+  adapter deliver   the target on stdin -> {"outcome","reason","detail"}
+                    outcome is delivered | refused | failed
+                    exit 0 for delivered and refused, 3 for failed
+
+WHAT WRITING THIS ADAPTER REQUIRES. Three questions, and none of them has an
+answer that can be assumed from another substrate:
+
+  1. WHAT IS THE TRANSPORT? Name the thing an outside process writes to so that
+     a running session reads a line: a socket, a fifo, a CLI verb, a pane. Then
+     name what proves it arrived, because a write that reports success into a
+     void is worse than one that fails.
+  2. WHAT IS CONSENT, AND WHERE IS IT WRITTEN? Every substrate has one. On
+     Claude sessions it is a settings value the recipient sets; on tmux it is
+     the act of registering a pane. Find the equivalent, read it, and refuse
+     when it is absent. Never forge it, and never widen the gate from outside.
+  3. HOW IS A DEAD SESSION TOLD FROM A LIVE ONE, WITHOUT REVIVING IT? A record
+     that a session existed is not a session. Where the only way to reach a
+     recorded session is to restart it, the answer is refusal: a restart makes
+     a second copy of a unit and leaves the first one dead.
+
+The payload the core sends carries: handle, bus_dir, session, pid, owner,
+address, pane, cwd, unread, text. Deliver `text` and nothing else -- this file
+must never compose a sentence.
+"""
+
+import json
+import sys
+
+REASON = ("the codex adapter is a documented stub: no transport, no consent rule and "
+          "no liveness test has been written for this substrate, so nothing can be "
+          "delivered on it")
+
+
+def main():
+    verb = sys.argv[1] if len(sys.argv) > 1 else ""
+    if verb == "probe":
+        print(json.dumps({"substrate": "codex", "present": False, "reason": REASON}))
+        return 0
+    if verb == "deliver":
+        print(json.dumps({"outcome": "failed", "reason": "no adapter for this substrate",
+                          "detail": REASON}))
+        return 3
+    sys.stderr.write(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -29,16 +29,18 @@ Classify each delegate: *alive and working* (leave it), *parked and waiting* (it
 
 **Sweep for strays.** Scan `tmux list-panes -a` for stale named delegate panes from closed units, and for **text sitting unsubmitted in a pane's input line** — a poke that lost its Enter. Stranded input is how a completion signal dies quietly and how a finished delegate reads as in-progress. Clearing it does not stick: the TUI restores cleared text on the next empty-input keypress. Dispose of it by appending an explicit retraction and submitting deliberately, then verify the pane started processing.
 
-## Wake — push
+## The wake rail
 
-`scripts/bus-watch.sh` (needs `fswatch` and `tmux`) watches the inbox directory and pokes the recipient's pane on a new message. **One machine-level daemon serves every orchestration on the bus;** the pidfile guard refuses a second. `status` answers "already up?", `stop` and `restart` manage it, and **`restart` is required after editing it**, because a running watcher holds the old code.
+`scripts/bus-nudge` is the wake rail here. It watches the buses on the machine from outside every session, fires on a handle's **unread count**, and its tmux adapter pokes the pane that handle registered. One instance serves every orchestration on the bus. `--check` answers "already up?", `--once` runs a single pass, `--watch` runs the rail, and `--law` prints the one sentence it delivers and proves it carries nothing else. It logs every delivery and every refusal to syslog whatever its caller does with stdout.
+
+**It delivers one fixed sentence and never anything else.** The sentence names a bus directory and carries no subject, sender or body, so the poke can only send a session to its own inbox.
+
+**Consent here is the registration.** A pane is a keyboard, and a handle that registered one said in the act that this machine's own rail may type there. A handle with no pane is refused, and so is a pane that has gone: nothing is reopened, because a new pane is a new session.
 
 - **A sent poke is not a delivered poke.** Send the text and the Enter as **separate** `send-keys` calls, then `capture-pane` and confirm the recipient actually started processing: a spinner or an advancing token counter, not your text sitting in its input line. A single combined send gets coalesced and the TUI reads the trailing newline as a literal newline in the composer.
-- **Push carries the wake leg of a report.** With the watcher up, a delegate's `bus send` pokes the orchestrator's pane by itself, so the record and the wake a report owes (`delegate.md`) are one act. With the watcher down they come apart, and the sender pokes the recipient's pane itself, under the delivery rule above.
-- **Push replaces polling** for the message-wake job. A timed loop is a slow failsafe for a missed poke, or for genuinely time-triggered work. Unattended, one of the two has to be standing: push where the watcher is up and proven (`status` answers that in one command), else a timed loop running `run.md`'s beat. Establish which one before the human leaves.
-- **The cursor is the truth; the poke is a hint.** A poke whose `bus inbox` returns nothing is the watcher's own defect, not a lost message. What is forbidden is treating a poke as proof of a message and skipping the cheap cursor check.
-
-**Two open defects in this watcher, found in the field and not yet fixed.** It pokes on a **file event** rather than on the recipient's **unread count**, so every read re-announces itself and a careful reader sustains a poke loop that costs a turn per cycle. And it logs only if its caller redirects stdout, so a detached watcher started without a redirect keeps no record. On a quiet bus the loop is a net tax; stopping the watcher is a documented operation that reverses in one command, and delivery is unaffected because only the wake goes away.
+- **Push carries the wake leg of a report.** With the rail up, a delegate's `bus send` pokes the orchestrator's pane by itself, so the record and the wake a report owes (`delegate.md`) are one act. With the rail down they come apart, and the sender pokes the recipient's pane itself, under the delivery rule above.
+- **Push replaces polling** for the message-wake job. A timed loop is a slow failsafe for a missed poke, or for genuinely time-triggered work. Unattended, one of the two has to be standing: push where the rail is up and proven (`--check` answers that in one command), else a timed loop running `run.md`'s beat. Establish which one before the human leaves.
+- **The cursor is the truth; the poke is a hint.** A poke whose `bus inbox` returns nothing is the rail's own defect, not a lost message. What is forbidden is treating a poke as proof of a message and skipping the cheap cursor check.
 
 ## Reach the human
 
@@ -67,7 +69,7 @@ A pane persists after its delegate exits. How it is retired is a run-level postu
 | tmux spawn and push | yes | yes | yes | via WSL. Native: no tmux, so open windows manually and nudge by hand |
 | notify | `osascript` | `notify-send` | **none — use the `human` handle plus chat** | PowerShell toast, else the bell |
 | present | `open` | `xdg-open` | **none — publish the brief where the human looks** | `start` |
-| fswatch push | `brew install fswatch` | `apt install fswatch` | `apt install fswatch` | WSL only |
+| the wake rail | yes | yes | yes | WSL only |
 
 On native Windows without WSL the bus, the method and a manual nudge all work, while spawn and push degrade to the human launching panes. Note it in the workpaper when it applies.
 
