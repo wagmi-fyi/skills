@@ -11,6 +11,25 @@ The method needs a handful of physical acts: start a session, address it, see wh
 | **Reach the human** | the live channel an escalation travels on | `human-in-the-loop.md`, `decision-briefs.md` |
 | **Retire a delegate** | what happens to a session whose unit closed | `run.md` |
 
+## Waking has a standing rail, and it keeps the seam
+
+`scripts/bus-nudge` is the one act above that runs continuously rather than on
+demand. Its core watches buses, resolves who owns a handle, decides live from
+dead and composes one fixed sentence, and it holds no knowledge of any harness.
+Reaching a session is an adapter under `scripts/bus-nudge-adapters/`, one per
+substrate, selected the same way this file selects a runbook. So the seam holds
+in code as well as in prose: a substrate whose adapter is absent is refused by
+name, and a run learns that instead of watching a rail deliver nothing in
+silence.
+
+The program and its adapters ship here, so a machine that installs the rail as a
+service takes its copy from this directory. Which bus the rail watches is the
+same `shared_bus` the settings seam above already decides, read the same way, so
+one answer says where sessions meet and a second one cannot drift from it.
+
+Each runbook's wake section says what its adapter does and what consent means
+there.
+
 ## The bus is the same on every substrate
 
 Handles, directed inboxes, the cursor, pointers, leases and the `human` ledger are files (`session-bus.md`). They work identically wherever the sessions live, and they outlive every session. **When a substrate signal and the bus disagree about what happened, the bus is the record** — a session's screen, its status field and its process are all evidence about the session, not about the work.

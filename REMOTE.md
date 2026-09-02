@@ -2,9 +2,18 @@
 
 Remote: `https://github.com/wagmi-fyi/skills.git`. The repository is public.
 
-This is the published library. Every skill here is built somewhere else and copied
-in, so no file here is a source file. An edit made here and not made upstream is
-lost at the next publish.
+This is the published library. It is the source of truth for some of what it
+holds and the output of a publish for the rest, so check which before you edit
+a file.
+
+`bookkeeping` and `qbo` are sourced here. The repository they were built in
+was retired on 2026-09-02, and this one took over. An edit to either of them is
+made here, on a branch, and reaches everybody when a maintainer merges the pull
+request.
+
+`master-builder` and `orchestrate` are published output. They are built in
+CommonClaw's own repository and copied in, so an edit made to them here and not
+made upstream is lost at the next publish.
 
 ## Why this repository has a remote
 

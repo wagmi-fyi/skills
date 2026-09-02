@@ -7,7 +7,7 @@
 output_dir: ""              # examples: "docs/orchestrations"  |  ".orchestrations"  |  "/abs/path"
 
 # Bus data location (machine-level; the bus CLI also honors $SESSION_BUS_DIR).
-bus_dir: "~/.claude/session-bus"
+bus_dir: ""
 
 # The bus that every account on this machine joins, where one exists. It sits
 # outside every home, group-owned and group-writable. `desktop-wake --check`

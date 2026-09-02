@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""bus-nudge delivery adapter -- Claude sessions.
+
+THE ADAPTER CONTRACT, WHICH EVERY ADAPTER HERE ANSWERS AND NONE MAY WIDEN:
+
+  1. Deliver the fixed text, verbatim, to a live consenting session.
+  2. Refuse the dead without resurrecting them.
+  3. Fail loudly when the transport changes.
+
+  adapter probe               {} on stdin -> {"substrate","present","reason"}
+  adapter deliver             the target on stdin -> {"outcome","reason","detail"}
+                              outcome is delivered | refused | failed
+                              exit 0 for delivered and refused, 3 for failed
+
+THE TEXT ARRIVES READY. This file never composes a sentence and never appends
+to one: it writes payload["text"] and nothing else. The one sentence this rail
+may deliver is defined once, in the core.
+
+THE TRANSPORT. A live session listens on a UNIX socket named for its pid. The
+frame is two JSON lines: an auth line carrying the peerToken from that
+session's key file, then a user message. The core's own logs describe the same
+frame:
+
+  { echo '{"type":"auth","token":"..."}'
+    echo '{"type":"user","message":{"role":"user","content":"hello"}}'
+  } | socat - UNIX-CONNECT:<socket>
+
+Everything this adapter needs is written by the session itself, under the
+session owner's home and runtime directory, which is why this rail runs as the
+session owner and never as root on their behalf.
+
+CONSENT IS READ, NEVER ASSUMED, AND NEVER FORGED. An outside sender cannot
+attest a permission mode, so a session holds its message for human approval
+unless "crossSessionInbound" is set to "accept". A headless rail cannot answer
+that prompt, so this adapter reads the setting from the settings files that
+decide it and refuses before sending when the answer is not accept. Forging the
+attestation field would turn the gate off from the outside; that is a security
+bypass, not a delivery mechanism, and it is not built here.
+
+  KNOWN GAP, STATED RATHER THAN SMOOTHED OVER. A session that opted in through
+  an inline launch flag rather than a settings file is invisible to this check
+  and is refused. The ruled shape is the machine-wide managed setting, which
+  this check reads, so the gap closes wherever the machine sets it.
+
+NEVER RESURRECT. A session whose process is gone is refused. Resuming it makes
+a second, divergent copy of a unit under a new process and a new session id;
+the original does not come back.
+"""
+
+import json
+import os
+import pwd
+import re
+import socket
+import sys
+
+SESSIONS = "~/.claude/sessions"
+KEY_RE = re.compile(r"^(\d+)\.[0-9a-f]{64}\.key$")
+TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+STRICTNESS = {"accept": 0, "hold": 1, "refuse": 2}
+
+
+def out(outcome, reason, detail="", **extra):
+    payload = {"outcome": outcome, "reason": reason}
+    if detail:
+        payload["detail"] = detail
+    payload.update(extra)
+    print(json.dumps(payload))
+    sys.exit(3 if outcome == "failed" else 0)
+
+
+def sessions_dir():
+    return os.path.expanduser(SESSIONS)
+
+
+def socks_dir():
+    rt = os.environ.get("XDG_RUNTIME_DIR")
+    if not rt:
+        rt = "/run/user/%d" % os.geteuid()
+    return os.path.join(rt, "cc-socks")
+
+
+def probe():
+    sd, kd = sessions_dir(), socks_dir()
+    if not os.path.isdir(sd):
+        return {
+            "substrate": "claude",
+            "present": False,
+            "reason": "no session records at %s, so no session here is addressable this way" % sd,
+        }
+    if not os.path.isdir(kd):
+        return {
+            "substrate": "claude",
+            "present": False,
+            "reason": "no socket directory at %s. A session must be running, and it must "
+                      "belong to this account" % kd,
+        }
+    live = [f for f in os.listdir(kd) if f.endswith(".sock")]
+    return {
+        "substrate": "claude",
+        "present": True,
+        "reason": "%d session socket(s) under %s" % (len(live), kd),
+    }
+
+
+def read_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def consent():
+    """The effective crossSessionInbound, and which layer decided it.
+
+    Managed policy can force a value a user cannot loosen, and a repository may
+    tighten but never loosen. So the effective answer is the strictest value any
+    layer states, and an absent setting is not consent: a session that bypasses
+    prompts holds an unattested message by default.
+    """
+    layers = []
+    for label, path in (
+        ("managed", "/etc/claude-code/managed-settings.json"),
+        ("user", os.path.expanduser("~/.claude/settings.json")),
+    ):
+        data = read_json(path)
+        if isinstance(data, dict) and isinstance(data.get("crossSessionInbound"), str):
+            layers.append((label, path, data["crossSessionInbound"]))
+    return layers
+
+
+def project_consent(cwd):
+    layers = []
+    if not cwd:
+        return layers
+    for name in ("settings.json", "settings.local.json"):
+        path = os.path.join(cwd, ".claude", name)
+        data = read_json(path)
+        if isinstance(data, dict) and isinstance(data.get("crossSessionInbound"), str):
+            layers.append(("repo", path, data["crossSessionInbound"]))
+    return layers
+
+
+def deliver(payload):
+    handle = payload.get("handle") or "?"
+    pid = payload.get("pid")
+    want_session = payload.get("session") or ""
+    text = payload.get("text") or ""
+    owner = payload.get("owner") or ""
+
+    if not text:
+        out("failed", "the core handed this adapter no text to deliver")
+    me = pwd.getpwuid(os.geteuid()).pw_name
+    if owner and owner != me:
+        out("refused", "handle %s belongs to %s, and this rail runs as %s" % (handle, owner, me))
+
+    sd = sessions_dir()
+    if not os.path.isdir(sd):
+        out("failed", "the transport changed",
+            "sessions are no longer recorded at %s" % sd)
+
+    rec_path = os.path.join(sd, "%s.json" % pid)
+    rec = read_json(rec_path)
+    if rec is None:
+        # No record and no process is an ended session. No record WITH a live
+        # process is the transport moving under us, and those are different
+        # findings.
+        if pid and os.path.isdir("/proc/%d" % pid):
+            out("failed", "the transport changed",
+                "pid %d is running but has no session record at %s" % (pid, rec_path))
+        out("refused", "the session has ended", "no record at %s" % rec_path)
+
+    for field in ("sessionId", "messagingSocketPath", "pid"):
+        if field not in rec:
+            out("failed", "the transport changed",
+                "the session record at %s has no '%s' field" % (rec_path, field))
+
+    if want_session and rec["sessionId"] != want_session:
+        out("refused", "the pid now belongs to a different session",
+            "bus says %s, the record says %s" % (want_session, rec["sessionId"]))
+
+    sock_path = rec["messagingSocketPath"]
+    if not os.path.exists(sock_path):
+        out("refused", "the session has ended",
+            "no socket at %s. It is not resumed from here: a resume forks the session "
+            "instead of reviving it" % sock_path)
+
+    # Consent, read from the files that decide it.
+    layers = consent() + project_consent(rec.get("cwd") or payload.get("cwd") or "")
+    if not layers:
+        out("refused", "no session on this machine has opted in",
+            "no settings file sets crossSessionInbound, and an unattested message is "
+            "held by default. Set it to accept in the machine-wide managed settings")
+    worst = max(layers, key=lambda l: STRICTNESS.get(l[2], 9))
+    if STRICTNESS.get(worst[2], 9) != 0:
+        out("refused", "the session does not consent",
+            "%s settings at %s set crossSessionInbound to '%s'" % (worst[0], worst[1], worst[2]))
+
+    # The auth token, written by the session for its own socket.
+    token = None
+    key_path = None
+    try:
+        for name in os.listdir(sd):
+            m = KEY_RE.match(name)
+            if m and int(m.group(1)) == int(pid):
+                key_path = os.path.join(sd, name)
+                break
+    except OSError as exc:
+        out("failed", "the transport changed", "cannot list %s: %s" % (sd, exc))
+    if key_path is None:
+        out("failed", "the transport changed",
+            "no messaging key matching '<pid>.<64 hex>.key' for pid %s in %s" % (pid, sd))
+    key = read_json(key_path)
+    if not isinstance(key, dict) or not TOKEN_RE.match(str(key.get("peerToken", ""))):
+        out("failed", "the transport changed",
+            "the key at %s carries no 32-hex peerToken" % key_path)
+    token = key["peerToken"]
+
+    frame = (
+        json.dumps({"type": "auth", "token": token})
+        + "\n"
+        + json.dumps({"type": "user", "message": {"role": "user", "content": text}})
+        + "\n"
+    ).encode("utf-8")
+
+    sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sk.settimeout(10)
+    try:
+        sk.connect(sock_path)
+        sk.sendall(frame)
+        sk.shutdown(socket.SHUT_WR)
+    except (ConnectionRefusedError, FileNotFoundError):
+        out("refused", "the session has ended",
+            "the socket at %s is not accepting connections" % sock_path)
+    except OSError as exc:
+        out("failed", "the transport changed",
+            "writing the frame to %s failed: %s" % (sock_path, exc))
+    finally:
+        try:
+            sk.close()
+        except OSError:
+            pass
+
+    out("delivered", "nudged %s" % handle,
+        "session %s, pid %s, over %s" % (rec["sessionId"][:8], pid, sock_path),
+        consent_layer=worst[0], consent_source=worst[1])
+
+
+def main():
+    verb = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        payload = {}
+    if verb == "probe":
+        print(json.dumps(probe()))
+        return 0
+    if verb == "deliver":
+        deliver(payload)
+        return 0
+    sys.stderr.write(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

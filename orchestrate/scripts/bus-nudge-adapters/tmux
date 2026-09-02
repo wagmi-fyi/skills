@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""bus-nudge delivery adapter -- tmux panes.
+
+THE ADAPTER CONTRACT, WHICH EVERY ADAPTER HERE ANSWERS AND NONE MAY WIDEN:
+
+  1. Deliver the fixed text, verbatim, to a live consenting session.
+  2. Refuse the dead without resurrecting them.
+  3. Fail loudly when the transport changes.
+
+  adapter probe     {} on stdin -> {"substrate","present","reason"}
+  adapter deliver   the target on stdin -> {"outcome","reason","detail"}
+                    outcome is delivered | refused | failed
+                    exit 0 for delivered and refused, 3 for failed
+
+This is the pane poke, behind the contract above, so the core does not have to
+know what a pane is.
+
+CONSENT HERE IS THE REGISTRATION. A pane is a keyboard. A handle that
+registered one said, in the act, that keystrokes from this machine's own rail
+may arrive there; a handle registered with no pane said the opposite, and is
+refused. There is no separate setting to read, because there is no gate
+between a keystroke and the pane it is typed into.
+
+THE SPLIT KEYSTROKE IS LOAD-BEARING. Text and Enter go as two sends with a
+pause between them. A single combined send is coalesced into one chunk on a
+busy pane, and the composer then reads the trailing newline as a literal
+newline rather than a submit: the poke lands and never sends. Do not
+recombine them.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+
+def out(outcome, reason, detail="", **extra):
+    payload = {"outcome": outcome, "reason": reason}
+    if detail:
+        payload["detail"] = detail
+    payload.update(extra)
+    print(json.dumps(payload))
+    sys.exit(3 if outcome == "failed" else 0)
+
+
+def tmux(*args, timeout=10):
+    return subprocess.run(
+        ["tmux"] + list(args),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
+    )
+
+
+def probe():
+    if shutil.which("tmux") is None:
+        return {"substrate": "tmux", "present": False,
+                "reason": "the tmux binary is not on PATH, so no pane has anything to receive"}
+    try:
+        got = tmux("list-panes", "-a", "-F", "#{pane_id}")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"substrate": "tmux", "present": False,
+                "reason": "tmux did not answer: %s" % exc}
+    if got.returncode != 0:
+        return {"substrate": "tmux", "present": False,
+                "reason": "no tmux server is running for this account, so there are no panes: %s"
+                          % got.stderr.decode("utf-8", "replace").strip()}
+    panes = [p for p in got.stdout.decode("utf-8", "replace").split() if p]
+    return {"substrate": "tmux", "present": True,
+            "reason": "%d pane(s) on this account's tmux server" % len(panes)}
+
+
+def live_panes():
+    got = tmux("list-panes", "-a", "-F", "#{pane_id}")
+    if got.returncode != 0:
+        return None, got.stderr.decode("utf-8", "replace").strip()
+    return [p for p in got.stdout.decode("utf-8", "replace").split() if p], ""
+
+
+def deliver(payload):
+    handle = payload.get("handle") or "?"
+    pane = (payload.get("pane") or "").strip()
+    text = payload.get("text") or ""
+
+    if not text:
+        out("failed", "the core handed this adapter no text to deliver")
+    if shutil.which("tmux") is None:
+        out("failed", "the transport changed", "the tmux binary is gone from PATH")
+    if not pane or pane == "-":
+        out("refused", "the handle registered no pane",
+            "handle %s has nowhere on this substrate to receive a keystroke" % handle)
+
+    panes, err = live_panes()
+    if panes is None:
+        out("failed", "the transport changed",
+            "tmux would not list panes: %s" % err)
+    if pane not in panes:
+        out("refused", "the pane is gone",
+            "pane %s is not on this server. Nothing is reopened from here: a new pane "
+            "is a new session, not this one" % pane)
+
+    got = tmux("send-keys", "-t", pane, "-l", text)
+    if got.returncode != 0:
+        out("failed", "the transport changed",
+            "send-keys refused a pane it had just listed: %s"
+            % got.stderr.decode("utf-8", "replace").strip())
+    time.sleep(0.5)
+    got = tmux("send-keys", "-t", pane, "Enter")
+    if got.returncode != 0:
+        out("failed", "the transport changed",
+            "the text was typed into %s but Enter was refused, so it sits unsent: %s"
+            % (pane, got.stderr.decode("utf-8", "replace").strip()))
+
+    out("delivered", "nudged %s" % handle, "pane %s" % pane)
+
+
+def main():
+    verb = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        payload = {}
+    if verb == "probe":
+        print(json.dumps(probe()))
+        return 0
+    if verb == "deliver":
+        deliver(payload)
+        return 0
+    sys.stderr.write(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -15,6 +15,13 @@ Answer the six acts in `../substrate.md` from a **live session on the substrate*
 5. **Reach the human.** Which channel actually arrives, and which one exits 0 having reached nobody.
 6. **Retire a delegate.** What happens to a session whose unit closed, and whether anything has to be closed at all.
 
+**Wake delivery has a written contract, and the stub for it ships.** The standing
+wake rail (`scripts/bus-nudge`) keeps its transport in a per-substrate adapter,
+and the codex adapter beside the others is a documented stub: it refuses by name
+so that a machine selecting this substrate is told, rather than being served a
+rail that reaches nobody in silence. Its header carries the three questions
+writing it requires, and answering act 4 above is the same work.
+
 Then the two questions every runbook answers: how the orchestrator learns a delegate blocked, and what fails silently.
 
 **Derive each answer, quote what you ran, and do not carry a claim over from another runbook.** A borrowed mechanism that happens to be wrong is worse than an admitted gap, because the gap gets worked around and the wrong mechanism gets trusted.

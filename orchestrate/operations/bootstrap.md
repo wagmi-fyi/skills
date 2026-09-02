@@ -6,6 +6,7 @@ Turn a project brief into a runnable orchestration: a decomposed unit/wave graph
 Produce `<output_dir>/<project-slug>/{plan.md, workpaper.md}` — a dependency graph of units (each with a lane + a gate), waves, the serialization point, and a cold-boot-able workpaper — ready for `run`.
 
 ## 0. Resolve the output location (FIRST — never hardcode)
+- **A project that came from `operations/launch.md` already has a directory.** That is the output location, and the convention file already settled it. Do not ask again.
 - Use `--out <dir>` if given; else `config.yaml: output_dir`; else **establish it**: detect the repo's convention (does it already keep generated docs/output somewhere? a `docs/` dir? else propose `./orchestrations/`), propose, and **confirm with the human** (a small "where do artifacts live" crossroads).
 - `<project-slug>` = a short kebab name from the brief; confirm.
 - **Record** the resolved `output_dir` in the workpaper front-matter; offer to persist it to `config.yaml`.
