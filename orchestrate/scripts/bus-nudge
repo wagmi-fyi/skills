@@ -1,0 +1,742 @@
+#!/usr/bin/env python3
+"""bus-nudge -- tell a live session it has unread bus mail, and nothing else.
+
+THE DEFECT THIS CLOSES. The session bus is files. A delegate writes its report
+into an inbox and announces it to nobody. The reader learns about it when it
+next happens to look, which for an idle session is never, and for an ended one
+is never at all. Every in-session mechanism tried so far dies with the session.
+
+THE LAW THIS RAIL RUNS UNDER.
+
+  1. NUDGE ONLY. The one thing this program may ever deliver is the sentence in
+     NUDGE_TEMPLATE below, which names a bus directory and says nothing else.
+     It carries no instruction, no subject, no sender and no body. A session
+     that receives it looks at its own inbox, and the inbox is what it acts on.
+     So a wrong, stale or hostile nudge can waste a turn and can never inject
+     work.
+  2. THE BUS STAYS THE ONLY INPUT. This program never writes to a bus. It reads
+     inboxes and cursors and it appends nothing anywhere on the bus. A rail
+     that recorded its own failures into an inbox would raise unread mail,
+     which would raise a nudge, which would raise more mail. Failures go to the
+     log.
+  3. SAME USER. A handle is nudged only by a process running as the account
+     that registered it. Delivery into somebody else's session is a different
+     act with a different consent story, and this program refuses it.
+  4. NEVER RESURRECT. A handle whose process is gone is refused. Bringing a
+     recorded session back is a fork, not a wake, and a fork is two divergent
+     copies of one unit.
+  5. NEVER RETRY INTO SPAM. One nudge per handle per newest-message-id. A
+     session that was nudged and did not drain gets no second nudge until new
+     mail actually arrives.
+
+WHAT IS CORE AND WHAT IS AN ADAPTER. This file knows about buses, accounts,
+processes and one sentence. It knows nothing about how a session is reached.
+Delivery is an adapter, selected through the resolution order below, because
+the transport is exactly the thing that differs per machine and per harness.
+This is master-builder's Adapters primitive (skill-primitives.md).
+
+  bus-nudge --check          resolve everything, probe the adapters, deliver
+                             nothing. Run this first, and again to prove a
+                             watcher armed earlier is still up.
+  bus-nudge --once           one pass over every watched bus, then exit
+  bus-nudge --watch          --once on a loop; this is what the unit runs
+  bus-nudge --law            print the fixed sentence and prove it carries no
+                             interpolation but the bus directory. Exit 1 if it
+                             ever does. This is the gate, runnable.
+
+EXIT CODES. 0 ok. 1 the sentence law is broken. 2 usage. 3 no adapter, or the
+adapter says its transport changed under it -- both walls, both loud.
+"""
+
+import argparse
+import json
+import os
+import pwd
+import re
+import string
+import subprocess
+import sys
+import syslog
+import time
+
+# --------------------------------------------------------------- THE SENTENCE
+#
+# ONE format field, named bus_dir, and no other way to build delivered text.
+# `--law` re-derives the field set from this string at runtime, so the gate is
+# a command anybody can run rather than a grep of the author's honesty.
+NUDGE_TEMPLATE = "you have unread bus mail on {bus_dir}"
+NUDGE_FIELDS = {"bus_dir"}
+
+
+def nudge_text(bus_dir):
+    """The only text this program ever hands an adapter."""
+    return NUDGE_TEMPLATE.format(bus_dir=bus_dir)
+
+
+def law_fields():
+    return {f for _, f, _, _ in string.Formatter().parse(NUDGE_TEMPLATE) if f}
+
+
+# ------------------------------------------------------------------ resolution
+#
+# Local -> Firm -> Core -> error, first match wins, no implicit merging
+# (master-builder skill-patterns.md). Local is the command line and the
+# environment. Firm is the machine conf. Core is the shipped default, which for
+# the adapter means detection. Nothing left to resolve is an error, never a
+# guess.
+CONF = os.environ.get("BUS_NUDGE_CONF", "/etc/bus-nudge.conf")
+DEFAULTS = {
+    "ENABLED": "yes",
+    "ADAPTER": "",
+    "BUS_DIRS": "",
+    "POLL_SECS": "5",
+    "STATE_DIR": "",
+    "ADAPTER_DIR": "",
+}
+
+
+# The shared bus is not this program's setting to invent. It is the skill's,
+# under `shared_bus`, and it resolves the way every other setting in this skill
+# resolves: the environment, then the machine conf, then the shipped
+# config.yaml. Reading the same answer here is what keeps one machine's layout
+# out of a program that runs on any of them.
+SKILL_CONF = os.environ.get("ORCHESTRATE_CONF", "/etc/orchestrate.conf")
+SKILL_CONFIG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "config.yaml"
+)
+
+
+def read_setting(path, key):
+    """One `key: value` or `KEY=value` line, trailing comment and quotes off.
+
+    The seam's files are flat, so this is what reading them costs. A yaml
+    parser would be a dependency for a program that ships with none.
+    """
+    pattern = re.compile(r"^[ \t]*%s[ \t]*[:=][ \t]*(.*)$" % re.escape(key))
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                m = pattern.match(line)
+                if not m:
+                    continue
+                raw = m.group(1).split("#", 1)[0].strip()
+                if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+                    raw = raw[1:-1]
+                return raw or None
+    except OSError:
+        return None
+    return None
+
+
+def shared_bus():
+    """The bus every account on this machine joins, and where that was decided.
+
+    Blank is a real answer rather than a failure: where one person works alone
+    there is no shared bus, and the bus under their home is the only one.
+    """
+    env = os.environ.get("ORCHESTRATE_SHARED_BUS")
+    if env:
+        return env, "environment:ORCHESTRATE_SHARED_BUS"
+    val = read_setting(SKILL_CONF, "ORCHESTRATE_SHARED_BUS")
+    if val:
+        return val, SKILL_CONF
+    val = read_setting(SKILL_CONFIG, "shared_bus")
+    if val:
+        return val, SKILL_CONFIG
+    return "", "unset"
+
+
+def read_conf(path):
+    """KEY="value" per line, one setting each, the shape every conf here uses."""
+    out = {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        return {}
+    return out
+
+
+class Settings:
+    def __init__(self, args):
+        conf = read_conf(CONF)
+        self.conf_path = CONF
+        self.conf_found = os.path.isfile(CONF)
+        self.origin = {}
+
+        def pick(key, local):
+            if local:
+                self.origin[key] = "command line or environment"
+                return local
+            env = os.environ.get("BUS_NUDGE_" + key)
+            if env:
+                self.origin[key] = "environment:BUS_NUDGE_" + key
+                return env
+            if conf.get(key):
+                self.origin[key] = self.conf_path
+                return conf[key]
+            self.origin[key] = "shipped default"
+            return DEFAULTS[key]
+
+        self.enabled = pick("ENABLED", "").lower()
+        self.adapter = pick("ADAPTER", args.adapter or "")
+        self.bus_dirs_raw = pick("BUS_DIRS", " ".join(args.bus or []))
+        self.poll_secs = pick("POLL_SECS", "")
+        self.state_dir = pick("STATE_DIR", "")
+        self.adapter_dir = pick("ADAPTER_DIR", "")
+
+        if not self.adapter_dir:
+            self.adapter_dir = os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "bus-nudge-adapters"
+            )
+        if not self.state_dir:
+            self.state_dir = default_state_dir()
+        try:
+            self.poll_secs = max(1, int(self.poll_secs))
+        except ValueError:
+            self.poll_secs = 5
+
+    def bus_dirs(self):
+        if self.bus_dirs_raw:
+            return [os.path.expanduser(d) for d in self.bus_dirs_raw.split() if d]
+        self.origin["BUS_DIRS"] = "discovery"
+        return discover_bus_dirs()
+
+
+def default_state_dir():
+    """Dedupe state, which is not a record and must never land on a bus.
+
+    Root gets the machine's state root. Everybody else gets their own, because
+    a per-user rail keeps per-user state.
+    """
+    if os.geteuid() == 0 and os.path.isdir("/var/lib"):
+        return "/var/lib/bus-nudge"
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(base, "bus-nudge")
+
+
+def discover_bus_dirs():
+    """The machine's shared bus, plus this account's own.
+
+    Discovery rather than a list, so an account that joins next month is
+    watched without anybody remembering to edit a conf. Other people's buses
+    are not discovered: this program only ever nudges its own user's handles,
+    so reading somebody else's bus would find nothing it may act on.
+
+    Where the shared bus is depends on the machine, so this program does not
+    name it. The skill's settings seam already answers it under `shared_bus`,
+    and that one answer decides where sessions meet for every tool here.
+    """
+    found = []
+    shared, _ = shared_bus()
+    for d in (shared, os.path.expanduser("~/.claude/session-bus")):
+        if not d:
+            continue
+        if os.path.isfile(os.path.join(d, "handles.json")) and d not in found:
+            found.append(d)
+    return found
+
+
+# ------------------------------------------------------------------- logging
+LOGGED_OPEN = False
+
+
+def log(level, msg):
+    global LOGGED_OPEN
+    if not LOGGED_OPEN:
+        syslog.openlog("bus-nudge", syslog.LOG_PID, syslog.LOG_USER)
+        LOGGED_OPEN = True
+    syslog.syslog(
+        {"err": syslog.LOG_ERR, "warn": syslog.LOG_WARNING, "info": syslog.LOG_INFO}.get(
+            level, syslog.LOG_INFO
+        ),
+        msg,
+    )
+    # Under systemd, stderr IS the journal, and syslog has already put the line
+    # there. Writing both gives every entry twice, which reads as a rail firing
+    # twice as often as it does.
+    if not os.environ.get("JOURNAL_STREAM"):
+        sys.stderr.write("[%s] %s\n" % (level, msg))
+        sys.stderr.flush()
+
+
+# ------------------------------------------------ identity, from bus records
+#
+# The bus record is the identity source. `bus init` runs inside the session it
+# names, so the handle's pid and session id were written by the thing they
+# describe. Nothing here searches for a session, because a search is three
+# chances to nudge a stranger.
+CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+
+
+def boot_time():
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return int(line.split()[1])
+    except OSError:
+        pass
+    return None
+
+
+def proc_start_epoch(pid):
+    """When this pid actually started, from the kernel.
+
+    A pid on its own is not an identity: pids are reused. Comparing the
+    process's real start against the moment the handle registered rejects a
+    recycled pid without knowing anything about what the process is.
+    """
+    bt = boot_time()
+    if bt is None:
+        return None
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            data = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    tail = data[data.rfind(")") + 2 :].split()
+    try:
+        return bt + int(tail[19]) // CLK_TCK
+    except (IndexError, ValueError):
+        return None
+
+
+def parse_ts(text):
+    try:
+        import datetime
+
+        return int(datetime.datetime.fromisoformat(text).timestamp())
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def liveness(rec):
+    """alive | gone | unrecorded, decided from the bus record and /proc alone."""
+    pid = rec.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return "unrecorded", "the handle carries no pid, so nothing says where it is"
+    if not os.path.isdir("/proc/%d" % pid):
+        return "gone", "pid %d is not running" % pid
+    started = parse_ts(rec.get("started", "")) or 0
+    began = proc_start_epoch(pid)
+    if began is not None and started and began > started + 60:
+        return (
+            "gone",
+            "pid %d is running but started after the handle registered, so the pid was reused"
+            % pid,
+        )
+    return "alive", "pid %d" % pid
+
+
+def unread_count(bus_dir, handle):
+    inbox = os.path.join(bus_dir, "inbox", "%s.jsonl" % handle)
+    try:
+        with open(inbox, "rb") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return 0, None
+    total = len([b for b in lines if b.strip()])
+    cursor = 0
+    try:
+        with open(os.path.join(bus_dir, "cursors", "%s.cursor" % handle), "r") as fh:
+            cursor = int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        cursor = 0
+    if total <= cursor:
+        return 0, None
+    newest = None
+    for raw in reversed(lines):
+        if not raw.strip():
+            continue
+        try:
+            newest = json.loads(raw.decode("utf-8", "replace")).get("id")
+        except ValueError:
+            newest = None
+        break
+    return total - cursor, newest
+
+
+# ------------------------------------------------------------------- adapters
+def adapter_path(settings, name):
+    return os.path.join(settings.adapter_dir, name)
+
+
+def run_adapter(settings, name, verb, payload=None, timeout=20):
+    path = adapter_path(settings, name)
+    if not (os.path.isfile(path) and os.access(path, os.X_OK)):
+        return {
+            "outcome": "failed",
+            "reason": "no adapter",
+            "detail": "substrate '%s' has no executable adapter at %s" % (name, path),
+        }
+    try:
+        proc = subprocess.run(
+            [path, verb],
+            input=json.dumps(payload or {}).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "outcome": "failed",
+            "reason": "adapter did not run",
+            "detail": "%s: %s" % (type(exc).__name__, exc),
+        }
+    text = proc.stdout.decode("utf-8", "replace").strip()
+    try:
+        out = json.loads(text)
+    except ValueError:
+        return {
+            "outcome": "failed",
+            "reason": "adapter spoke something other than JSON",
+            "detail": (text or proc.stderr.decode("utf-8", "replace"))[:400],
+        }
+    if proc.returncode == 3 and out.get("outcome") != "failed":
+        out["outcome"] = "failed"
+    return out
+
+
+def detect_adapter(settings):
+    """The Core fallback: ask each adapter whether its mechanism is here.
+
+    Same detect-first ladder scripts/spawn uses, and the same order, so a
+    machine that spawns delegates one way does not nudge them another.
+    """
+    for name in ("claude", "tmux", "codex"):
+        got = run_adapter(settings, name, "probe", {}, timeout=10)
+        if got.get("present") is True:
+            return name, got
+    return None, None
+
+
+def resolve_adapter(settings):
+    if settings.adapter:
+        got = run_adapter(settings, settings.adapter, "probe", {}, timeout=10)
+        if got.get("present") is not True:
+            why = got.get("detail") or got.get("reason") or "no reason given"
+            return None, {
+                "reason": "the declared substrate '%s' cannot deliver here: %s"
+                % (settings.adapter, why),
+                "source": settings.origin.get("ADAPTER"),
+            }
+        return settings.adapter, got
+    name, got = detect_adapter(settings)
+    if name is None:
+        return None, {
+            "reason": "no adapter under %s reports a present mechanism" % settings.adapter_dir,
+            "source": "detection",
+        }
+    settings.origin["ADAPTER"] = "detection"
+    return name, got
+
+
+# ---------------------------------------------------------------------- state
+def state_file(settings, bus_dir, handle):
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "_", "%s%s" % (bus_dir, os.sep + handle))
+    return os.path.join(settings.state_dir, slug + ".json")
+
+
+def read_state(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_state(path, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, path)
+    except OSError as exc:
+        log("warn", "could not write dedupe state at %s: %s" % (path, exc))
+
+
+# ----------------------------------------------------------------- the sweep
+def sweep(settings, adapter, dry_run=False):
+    me = pwd.getpwuid(os.geteuid()).pw_name
+    results = []
+    for bus_dir in settings.bus_dirs():
+        handles_path = os.path.join(bus_dir, "handles.json")
+        try:
+            with open(handles_path, "r", encoding="utf-8") as fh:
+                handles = json.load(fh)
+        except (OSError, ValueError) as exc:
+            log("warn", "cannot read %s: %s" % (handles_path, exc))
+            continue
+        if not isinstance(handles, dict):
+            continue
+
+        for handle, rec in sorted(handles.items()):
+            if not isinstance(rec, dict):
+                continue
+
+            # The human handle is an append-only ledger nobody drains, by
+            # design. Its rendering is the action-items file beside a
+            # workpaper. Nudging it would fire every pass, forever.
+            if handle == "human":
+                continue
+
+            unread, newest = unread_count(bus_dir, handle)
+            if unread <= 0:
+                continue
+
+            owner = rec.get("owner") or "?"
+            if owner != me:
+                results.append(
+                    record(settings, bus_dir, handle, newest, "refused",
+                           "handle belongs to %s, not %s" % (owner, me), dry_run)
+                )
+                continue
+
+            state = read_state(state_file(settings, bus_dir, handle))
+            if state.get("last_id") and state.get("last_id") == newest:
+                continue
+
+            live, why = liveness(rec)
+            if live != "alive":
+                results.append(
+                    record(settings, bus_dir, handle, newest, "refused",
+                           "%s: %s" % (live, why), dry_run)
+                )
+                continue
+
+            payload = {
+                "handle": handle,
+                "bus_dir": bus_dir,
+                "session": rec.get("session") or "",
+                "pid": rec.get("pid"),
+                "owner": owner,
+                "address": rec.get("address") or "",
+                "pane": rec.get("pane") or "",
+                "cwd": rec.get("cwd") or "",
+                "unread": unread,
+                # The adapter delivers this verbatim. It never composes text.
+                "text": nudge_text(bus_dir),
+            }
+            if dry_run:
+                results.append(
+                    record(settings, bus_dir, handle, newest, "dry-run",
+                           "would nudge over the %s adapter" % adapter, True)
+                )
+                continue
+
+            got = run_adapter(settings, adapter, "deliver", payload)
+            outcome = got.get("outcome", "failed")
+            detail = got.get("reason") or got.get("detail") or ""
+            results.append(
+                record(settings, bus_dir, handle, newest, outcome, detail, False)
+            )
+            if outcome == "failed":
+                # A transport that changed under us is a wall. Stop the pass
+                # rather than walking the rest of the board against a broken
+                # rail and logging the same failure once per handle.
+                return results, True
+    return results, False
+
+
+def prune_state(settings, older_than=30 * 86400):
+    """Drop dedupe state for a handle nothing has written to in a month.
+
+    A handle that is gone leaves its file behind forever otherwise. Thirty days
+    is far outside any window a nudge decision looks at, so pruning here can
+    never un-suppress a nudge that is still being suppressed on purpose.
+    """
+    cutoff = time.time() - older_than
+    try:
+        names = os.listdir(settings.state_dir)
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(settings.state_dir, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            pass
+
+
+def record(settings, bus_dir, handle, newest, outcome, detail, dry_run):
+    line = "%s on %s: %s%s" % (handle, bus_dir, outcome, (" -- " + detail) if detail else "")
+    log("err" if outcome == "failed" else "info", line)
+    if not dry_run:
+        path = state_file(settings, bus_dir, handle)
+        state = read_state(path)
+        state.update(
+            {
+                "last_id": newest,
+                "last_outcome": outcome,
+                "last_detail": detail,
+                "last_at": int(time.time()),
+                "count": int(state.get("count") or 0) + 1,
+            }
+        )
+        write_state(path, state)
+    return {"handle": handle, "bus_dir": bus_dir, "outcome": outcome, "detail": detail}
+
+
+# ----------------------------------------------------------------- the checks
+def cmd_law():
+    fields = law_fields()
+    print(json.dumps({
+        "template": NUDGE_TEMPLATE,
+        "fields": sorted(fields),
+        "allowed": sorted(NUDGE_FIELDS),
+        "rendered_example": nudge_text("/path/to/bus"),
+        "lawful": fields == NUDGE_FIELDS,
+    }, indent=2))
+    if fields != NUDGE_FIELDS:
+        sys.stderr.write(
+            "THE SENTENCE LAW IS BROKEN: the delivered text interpolates %s, and the "
+            "ruling allows %s and nothing else.\n"
+            % (sorted(fields), sorted(NUDGE_FIELDS))
+        )
+        return 1
+    return 0
+
+
+def cmd_check(settings, args):
+    adapter, why = resolve_adapter(settings)
+    # An inventory of what is here, which is not the same question as what a
+    # declared substrate resolves to. Anything in the directory that is not an
+    # executable file is something else's -- a cache, an editor's leavings --
+    # and reporting it as a broken adapter would invent a fault. A substrate
+    # named and then missing is still refused by name, in resolve_adapter.
+    probes = {}
+    if os.path.isdir(settings.adapter_dir):
+        for name in sorted(os.listdir(settings.adapter_dir)):
+            path = adapter_path(settings, name)
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                probes[name] = run_adapter(settings, name, "probe", {}, timeout=10)
+    blocking = []
+    if settings.enabled != "yes":
+        blocking.append("ENABLED is '%s' in %s, so this rail is turned off here"
+                        % (settings.enabled, settings.conf_path))
+    if not os.path.isdir(settings.adapter_dir):
+        blocking.append("no adapter directory at %s" % settings.adapter_dir)
+    if adapter is None:
+        blocking.append(why["reason"])
+    buses = settings.bus_dirs()
+    shared, shared_src = shared_bus()
+    if not buses:
+        blocking.append("no initialized bus found, and watching nothing reads exactly "
+                        "like watching a quiet bus")
+    out = {
+        "user": pwd.getpwuid(os.geteuid()).pw_name,
+        "conf": settings.conf_path,
+        "conf_found": settings.conf_found,
+        "enabled": settings.enabled,
+        "adapter": adapter,
+        "adapter_source": settings.origin.get("ADAPTER"),
+        "adapter_dir": settings.adapter_dir,
+        "adapter_probes": probes,
+        "bus_dirs": buses,
+        "bus_dirs_source": settings.origin.get("BUS_DIRS"),
+        "shared_bus": shared,
+        "shared_bus_source": shared_src,
+        "state_dir": settings.state_dir,
+        "poll_secs": settings.poll_secs,
+        "watchers": watcher_pids(),
+        "sentence": nudge_text("<bus_dir>"),
+        "ready": not blocking,
+        "blocking": blocking,
+    }
+    print(json.dumps(out, indent=2))
+    return 0 if not blocking else 3
+
+
+def watcher_pids():
+    """Who else is already watching, for this account.
+
+    A dead watcher and a quiet bus are indistinguishable from a session's side,
+    so silence must never stand for health.
+    """
+    out = []
+    me = os.geteuid()
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == os.getpid():
+            continue
+        try:
+            if os.stat("/proc/" + entry).st_uid != me:
+                continue
+            with open("/proc/%s/cmdline" % entry, "rb") as fh:
+                argv = fh.read().decode("utf-8", "replace").split("\0")
+        except OSError:
+            continue
+        if any("bus-nudge" in a for a in argv) and "--watch" in argv:
+            out.append(int(entry))
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--once", action="store_true")
+    ap.add_argument("--watch", action="store_true")
+    ap.add_argument("--law", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--adapter", default="")
+    ap.add_argument("--bus", action="append")
+    ap.add_argument("-h", "--help", action="store_true")
+    args = ap.parse_args()
+
+    if args.help or not (args.check or args.once or args.watch or args.law):
+        sys.stderr.write(__doc__)
+        return 2
+    if args.law:
+        return cmd_law()
+
+    # The law is checked before anything is delivered, every run. A build that
+    # broke it must not reach a session at all.
+    if law_fields() != NUDGE_FIELDS:
+        log("err", "refusing to run: the delivered sentence interpolates more than the "
+                   "bus directory. See `bus-nudge --law`.")
+        return 1
+
+    settings = Settings(args)
+    if args.check:
+        return cmd_check(settings, args)
+
+    if settings.enabled != "yes":
+        log("info", "bus-nudge is turned off in %s" % settings.conf_path)
+        return 0
+
+    adapter, why = resolve_adapter(settings)
+    if adapter is None:
+        log("err", "NO DELIVERY ADAPTER: %s (selected from %s). This is a wall: the "
+                   "rail is not degraded, it is absent, and no session is being nudged."
+                   % (why["reason"], why.get("source")))
+        return 3
+
+    if args.once:
+        results, broke = sweep(settings, adapter, args.dry_run)
+        print(json.dumps({"adapter": adapter, "results": results}, indent=2))
+        return 3 if broke else 0
+
+    prune_state(settings)
+    log("info", "watching %s over the %s adapter, every %ss"
+                % (", ".join(settings.bus_dirs()), adapter, settings.poll_secs))
+    while True:
+        _, broke = sweep(settings, adapter, args.dry_run)
+        if broke:
+            log("err", "stopping: the %s adapter says its transport changed. Nothing is "
+                       "being nudged until somebody looks." % adapter)
+            return 3
+        time.sleep(settings.poll_secs)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

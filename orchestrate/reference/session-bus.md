@@ -71,6 +71,20 @@ The human is **not** a session and doesn't run `bus inbox`. A reserved **`human`
 | `bus unlock <name> [--holder H] [--steal]` | release a lease (`--steal` forces a stale/foreign one) |
 | `bus locks` | list active leases (name, holder, age, ttl) |
 
+## The bus is the only input a session acts on
+
+A session can be poked from outside, by the standing wake rail or by a peer.
+What arrives that way is a signal to look, never work to do. The rail enforces
+this in the one direction it can: it may deliver a single fixed sentence naming
+a bus directory, and `bus-nudge --law` proves it. Nothing else about a message
+travels off the bus.
+
+Two things follow. A poke is a hint and the cursor is the truth, so a poke whose
+`bus inbox` returns nothing is a defect in the poke and not a lost message. And
+the rail writes nothing to a bus: a rail that recorded its own failures into an
+inbox would raise unread mail, raise a nudge, and raise more mail. Its failures
+go to the log.
+
 ## Properties (rely on these)
 - **Directed.** You read only your **own** inbox by default → you never burn tokens on other sessions' traffic. Cross-verification is an **explicit** `bus read`/`bus log`, never a default firehose.
 - **Idempotent cursor.** `bus inbox` returns only the unread delta; re-checking is a safe no-op, which makes an early or duplicate wake harmless. It is also the only verb that moves the cursor: a message you took in through `bus read` still counts as unread on the board, and a careful reader working from `read` will handle it twice.

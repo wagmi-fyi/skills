@@ -11,6 +11,8 @@ How orchestrations use git so parallel work never collides and the **commitment 
 - **Concurrent same-repo delegates: worktrees are REQUIRED, not guidance** — two lanes in one clone comingle silently (proven twice in the field). A trivial / tightly-serial **solo** unit may still run inline when no sibling shares the repo ("adapt the fan-out").
 - **Worktree-per-merge: the merge itself runs in a dedicated worktree created for that merge — never the shared main checkout.** Another session (or orchestration) may have the shared checkout on *any* branch, and a `rev-parse <branch>` name-check passes while you are not ON that branch — the merge lands wherever HEAD actually points. Create the worktree, merge, push, remove. *(Both rules are git instances of the general "exclusive lanes; reserved commitment surfaces" principle in `method.md` — apply the same shape in non-git media.)*
 
+A repository with one clone cannot open a second worktree on its mainline branch. There, merge in the checkout that holds it, and assert in the merge's own command that `HEAD` resolves to that branch and the tree is clean.
+
 ## Cross-orchestration: the commitment lease
 Builds/research parallelize freely (disjoint worktrees, **no locking**). **Only the commitment step takes a lease**, so two orchestrations — or one orchestrator running sibling projects — never merge/deploy/publish to the same target at once.
 
