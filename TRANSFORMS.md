@@ -43,6 +43,15 @@ and a real file when published, with identical content. Nothing else in the
 published tree is a link. Any other symlink reaching outside a skill's own tree
 is a publish blocker, not a transform.
 
+**T6. `orchestrate/scripts/bus-nudge` ships `/etc/bus-nudge.conf` as its conf
+default.** The source names the path its own installer writes. The published
+default is the plain one, and a deployment that installs the rail as a service
+sets its own path at install time, either through `BUS_NUDGE_CONF` in the
+environment or by rewriting the default line in the copy it installs. The
+installer owns that rewrite. The rule the file states around the line holds
+either way: the default and the installed conf have to name one file, or a
+machine's own ruling reaches nothing.
+
 **`.claude-plugin/` is publish-side only.** It is written here and never comes
 from a source tree.
 

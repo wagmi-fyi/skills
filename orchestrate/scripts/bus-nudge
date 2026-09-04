@@ -44,8 +44,16 @@ This is master-builder's Adapters primitive (skill-primitives.md).
                              interpolation but the bus directory. Exit 1 if it
                              ever does. This is the gate, runnable.
 
-EXIT CODES. 0 ok. 1 the sentence law is broken. 2 usage. 3 no adapter, or the
-adapter says its transport changed under it -- both walls, both loud.
+AN ACCOUNT WITH NO SESSION IS IDLE, NOT BROKEN. An adapter is present and finds
+nobody to deliver to whenever the account it runs for is not signed in, which on
+a machine with more than one person is most of the time. That is the ordinary
+state of this rail and it resolves the moment somebody starts a session, so the
+watcher stays up, re-checks on its own interval and logs one line when the state
+turns over. A missing adapter is the other case: nothing here knows how to reach
+a session at all, no amount of waiting changes it, and that is still a wall.
+
+EXIT CODES. 0 ok. 1 the sentence law is broken. 2 usage. 3 no adapter at all, or
+the adapter says its transport changed under it -- both walls, both loud.
 """
 
 import argparse
@@ -84,15 +92,37 @@ def law_fields():
 # environment. Firm is the machine conf. Core is the shipped default, which for
 # the adapter means detection. Nothing left to resolve is an error, never a
 # guess.
+#
+# THE DEFAULT IS THE PATH THE INSTALLER WRITES. The two have to name one file,
+# or a machine's own ruling reaches nothing and the rail runs on the shipped
+# defaults while a conf sits beside it saying otherwise. The answer lives here
+# rather than in the unit file, so a hand run of this program reads the file the
+# service reads. BUS_NUDGE_CONF is the override.
 CONF = os.environ.get("BUS_NUDGE_CONF", "/etc/bus-nudge.conf")
 DEFAULTS = {
     "ENABLED": "yes",
     "ADAPTER": "",
     "BUS_DIRS": "",
     "POLL_SECS": "5",
+    # How often to look again while no session is reachable. Longer than the
+    # working interval on purpose: with nobody signed in there is nothing to
+    # deliver and therefore nothing time-critical to miss, and re-probing every
+    # adapter every five seconds costs a machine three interpreter starts a
+    # second for as long as an account is away. The cost of the longer wait is
+    # bounded and stated: a session that starts with mail already waiting is
+    # nudged up to this many seconds later, once, and every nudge after that
+    # runs on POLL_SECS.
+    "IDLE_POLL_SECS": "60",
     "STATE_DIR": "",
     "ADAPTER_DIR": "",
 }
+
+# What resolve_adapter answers with. Three states, and the third is not the
+# second: an adapter that is here and finds no session is idle, and no adapter
+# at all is a wall.
+ADAPTER_READY = "ready"
+ADAPTER_IDLE = "idle"
+ADAPTER_ABSENT = "absent"
 
 
 # The shared bus is not this program's setting to invent. It is the skill's,
@@ -187,6 +217,7 @@ class Settings:
         self.adapter = pick("ADAPTER", args.adapter or "")
         self.bus_dirs_raw = pick("BUS_DIRS", " ".join(args.bus or []))
         self.poll_secs = pick("POLL_SECS", "")
+        self.idle_poll_secs = pick("IDLE_POLL_SECS", "")
         self.state_dir = pick("STATE_DIR", "")
         self.adapter_dir = pick("ADAPTER_DIR", "")
 
@@ -200,6 +231,14 @@ class Settings:
             self.poll_secs = max(1, int(self.poll_secs))
         except ValueError:
             self.poll_secs = 5
+        try:
+            self.idle_poll_secs = max(1, int(self.idle_poll_secs))
+        except ValueError:
+            self.idle_poll_secs = 60
+        # Never quicker than the working interval, whatever a conf says. An idle
+        # re-check that fires faster than delivery would spend more on looking
+        # for nobody than on serving somebody.
+        self.idle_poll_secs = max(self.idle_poll_secs, self.poll_secs)
 
     def bus_dirs(self):
         if self.bus_dirs_raw:
@@ -403,38 +442,115 @@ def run_adapter(settings, name, verb, payload=None, timeout=20):
     return out
 
 
-def detect_adapter(settings):
-    """The Core fallback: ask each adapter whether its mechanism is here.
+# The detection ladder, and the same order scripts/spawn uses, so a machine that
+# spawns delegates one way does not nudge them another.
+LADDER = ("claude", "tmux", "codex")
 
-    Same detect-first ladder scripts/spawn uses, and the same order, so a
-    machine that spawns delegates one way does not nudge them another.
+
+def adapter_present(settings, name):
+    """(answered, present, probe) for one adapter.
+
+    ANSWERED IS THE FIELD THAT DECIDES A WALL. An adapter that ran and said no
+    is a working mechanism reporting that nobody is here. One that could not be
+    executed, crashed, or spoke something other than JSON told us nothing, and
+    counting it as a no would let a broken adapter read as an idle account.
     """
-    for name in ("claude", "tmux", "codex"):
-        got = run_adapter(settings, name, "probe", {}, timeout=10)
-        if got.get("present") is True:
-            return name, got
-    return None, None
+    got = run_adapter(settings, name, "probe", {}, timeout=10)
+    answered = isinstance(got.get("present"), bool)
+    return answered, got.get("present") is True, got
+
+
+def installed_adapters(settings):
+    """Every executable file in the adapter directory.
+
+    Anything there that is not an executable file is something else's -- a
+    cache, an editor's leavings -- and calling it a broken adapter would invent
+    a fault.
+    """
+    out = []
+    try:
+        names = sorted(os.listdir(settings.adapter_dir))
+    except OSError:
+        return out
+    for name in names:
+        path = adapter_path(settings, name)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            out.append(name)
+    return out
+
+
+def detect_adapter(settings):
+    """The Core fallback: ask each adapter whether its mechanism is here."""
+    answered = []
+    for name in LADDER:
+        got_answer, present, got = adapter_present(settings, name)
+        if got_answer:
+            answered.append((name, got))
+        if present:
+            return name, got, answered
+    return None, None, answered
 
 
 def resolve_adapter(settings):
+    """Which adapter delivers here, or why none does.
+
+    THREE ANSWERS, AND THE THIRD IS NOT THE SECOND.
+
+      ready   an adapter reports a session it can reach.
+      idle    an adapter is here and reports no session. This is the ordinary
+              state of an account nobody is signed in to, and on a machine
+              with more than one account it is most of the time. It resolves
+              by itself the moment somebody starts a session.
+      absent  nothing here answered a probe at all. No amount of waiting
+              changes that, so it stays a wall.
+
+    Measured on a multi-account machine on 2026-09-02: the rail exited 3 for
+    an account with 22 session records and nobody signed in, systemd restarted
+    it every ten seconds, and the failing unit took a whole release apply down
+    with it.
+    """
     if settings.adapter:
-        got = run_adapter(settings, settings.adapter, "probe", {}, timeout=10)
-        if got.get("present") is not True:
-            why = got.get("detail") or got.get("reason") or "no reason given"
+        path = adapter_path(settings, settings.adapter)
+        if not (os.path.isfile(path) and os.access(path, os.X_OK)):
             return None, {
-                "reason": "the declared substrate '%s' cannot deliver here: %s"
-                % (settings.adapter, why),
+                "state": ADAPTER_ABSENT,
+                "reason": "the declared substrate '%s' has no executable adapter at %s"
+                % (settings.adapter, path),
                 "source": settings.origin.get("ADAPTER"),
             }
-        return settings.adapter, got
-    name, got = detect_adapter(settings)
+        got_answer, present, got = adapter_present(settings, settings.adapter)
+        if not got_answer:
+            return None, {
+                "state": ADAPTER_ABSENT,
+                "reason": "the declared substrate '%s' has an adapter that did not answer a probe: %s"
+                % (settings.adapter, got.get("detail") or got.get("reason") or "no reason given"),
+                "source": settings.origin.get("ADAPTER"),
+            }
+        if not present:
+            return None, {
+                "state": ADAPTER_IDLE,
+                "reason": "the %s adapter is here and reaches no session right now: %s"
+                % (settings.adapter, got.get("reason") or "no reason given"),
+                "source": settings.origin.get("ADAPTER"),
+            }
+        return settings.adapter, {"state": ADAPTER_READY, "probe": got}
+    name, got, answered = detect_adapter(settings)
     if name is None:
+        if not answered:
+            return None, {
+                "state": ADAPTER_ABSENT,
+                "reason": "no adapter under %s answered a probe, out of %d installed there"
+                % (settings.adapter_dir, len(installed_adapters(settings))),
+                "source": "detection",
+            }
         return None, {
-            "reason": "no adapter under %s reports a present mechanism" % settings.adapter_dir,
+            "state": ADAPTER_IDLE,
+            "reason": "adapter(s) %s are here and none reaches a session for this account right now"
+            % ", ".join(n for n, _ in answered),
             "source": "detection",
         }
     settings.origin["ADAPTER"] = "detection"
-    return name, got
+    return name, {"state": ADAPTER_READY, "probe": got}
 
 
 # ---------------------------------------------------------------------- state
@@ -492,15 +608,30 @@ def sweep(settings, adapter, dry_run=False):
                 continue
 
             owner = rec.get("owner") or "?"
+
+            # THE DEDUPE READ COMES BEFORE EVERY REFUSAL, and the ownership one
+            # sat above it. `record` writes the dedupe state and nothing read it
+            # back on this path, so a handle belonging to somebody else and
+            # carrying unread mail was logged once per pass, every POLL_SECS,
+            # forever. Measured on a multi-account machine on 2026-09-02:
+            # about 96 lines a minute, 138,000 a day, for one account, against
+            # 1 line over the same window for the account whose handles these
+            # were. That is three times the volume the unit template names as
+            # the thing it fixes, and it is paid in a journal every other unit
+            # on the box shares.
+            #
+            # The `human` skip ten lines above is the same shape caught earlier:
+            # a handle that can never be drained fires every pass. The
+            # liveness refusal below was already on the right side of this read.
+            state = read_state(state_file(settings, bus_dir, handle))
+            if state.get("last_id") and state.get("last_id") == newest:
+                continue
+
             if owner != me:
                 results.append(
                     record(settings, bus_dir, handle, newest, "refused",
                            "handle belongs to %s, not %s" % (owner, me), dry_run)
                 )
-                continue
-
-            state = read_state(state_file(settings, bus_dir, handle))
-            if state.get("last_id") and state.get("last_id") == newest:
                 continue
 
             live, why = liveness(rec)
@@ -618,14 +749,23 @@ def cmd_check(settings, args):
             path = adapter_path(settings, name)
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 probes[name] = run_adapter(settings, name, "probe", {}, timeout=10)
+    # BLOCKING IS WHAT SOMEBODY HAS TO FIX. IDLE IS WHAT RESOLVES ITSELF.
+    # An account with nobody signed in is the second, so it does not fail this
+    # check and does not fail the installer that runs it. Reporting it as a
+    # fault trains its reader to skip a red line, which is how the rail this
+    # program replaces got ignored in the first place.
     blocking = []
+    idle = []
     if settings.enabled != "yes":
         blocking.append("ENABLED is '%s' in %s, so this rail is turned off here"
                         % (settings.enabled, settings.conf_path))
     if not os.path.isdir(settings.adapter_dir):
         blocking.append("no adapter directory at %s" % settings.adapter_dir)
     if adapter is None:
-        blocking.append(why["reason"])
+        if why.get("state") == ADAPTER_IDLE:
+            idle.append(why["reason"])
+        else:
+            blocking.append(why["reason"])
     buses = settings.bus_dirs()
     shared, shared_src = shared_bus()
     if not buses:
@@ -637,6 +777,7 @@ def cmd_check(settings, args):
         "conf_found": settings.conf_found,
         "enabled": settings.enabled,
         "adapter": adapter,
+        "adapter_state": ADAPTER_READY if adapter else why.get("state"),
         "adapter_source": settings.origin.get("ADAPTER"),
         "adapter_dir": settings.adapter_dir,
         "adapter_probes": probes,
@@ -646,10 +787,12 @@ def cmd_check(settings, args):
         "shared_bus_source": shared_src,
         "state_dir": settings.state_dir,
         "poll_secs": settings.poll_secs,
+        "idle_poll_secs": settings.idle_poll_secs,
         "watchers": watcher_pids(),
         "sentence": nudge_text("<bus_dir>"),
         "ready": not blocking,
         "blocking": blocking,
+        "idle": idle,
     }
     print(json.dumps(out, indent=2))
     return 0 if not blocking else 3
@@ -712,27 +855,76 @@ def main():
         return 0
 
     adapter, why = resolve_adapter(settings)
-    if adapter is None:
-        log("err", "NO DELIVERY ADAPTER: %s (selected from %s). This is a wall: the "
-                   "rail is not degraded, it is absent, and no session is being nudged."
-                   % (why["reason"], why.get("source")))
-        return 3
 
     if args.once:
+        if adapter is None and why["state"] == ADAPTER_ABSENT:
+            log("err", "NO DELIVERY ADAPTER: %s (selected from %s). This is a wall: the "
+                       "rail is not degraded, it is absent, and no session is being nudged."
+                       % (why["reason"], why.get("source")))
+            return 3
+        if adapter is None:
+            log("info", "idle: %s" % why["reason"])
+            print(json.dumps({"adapter": None, "state": why["state"],
+                              "reason": why["reason"], "results": []}, indent=2))
+            return 0
         results, broke = sweep(settings, adapter, args.dry_run)
-        print(json.dumps({"adapter": adapter, "results": results}, indent=2))
+        print(json.dumps({"adapter": adapter, "state": ADAPTER_READY,
+                          "results": results}, indent=2))
         return 3 if broke else 0
 
+    # THE WATCHER RESOLVES ON EVERY PASS, NOT ONCE AT THE TOP.
+    #
+    # Resolving once meant an account with nobody signed in exited 3 at startup
+    # and never got to the loop, so systemd restarted it for as long as that
+    # person stayed away. What the rail is watching for -- a session -- is
+    # exactly the thing that comes and goes, so the answer is re-derived rather
+    # than decided at boot.
+    #
+    # ONE LINE PER TURNOVER, and nothing on the passes between. A rail that
+    # logged every idle pass would put 43,000 lines a day in a journal, which is
+    # the noise the loop it replaces produced.
     prune_state(settings)
-    log("info", "watching %s over the %s adapter, every %ss"
-                % (", ".join(settings.bus_dirs()), adapter, settings.poll_secs))
+    state = None
+    probed_at = time.time()
     while True:
+        if adapter is None and why["state"] == ADAPTER_ABSENT:
+            log("err", "NO DELIVERY ADAPTER: %s (selected from %s). This is a wall: the "
+                       "rail is not degraded, it is absent, and no session is being nudged."
+                       % (why["reason"], why.get("source")))
+            return 3
+        if adapter is None:
+            if state != ADAPTER_IDLE:
+                log("info", "idle: %s. Watching on, every %ss, and delivery resumes by "
+                            "itself when a session starts."
+                            % (why["reason"], settings.idle_poll_secs))
+                state = ADAPTER_IDLE
+            time.sleep(settings.idle_poll_secs)
+            adapter, why = resolve_adapter(settings)
+            probed_at = time.time()
+            continue
+        if state != adapter:
+            log("info", "watching %s over the %s adapter, every %ss"
+                        % (", ".join(settings.bus_dirs()), adapter, settings.poll_secs))
+            state = adapter
         _, broke = sweep(settings, adapter, args.dry_run)
         if broke:
             log("err", "stopping: the %s adapter says its transport changed. Nothing is "
                        "being nudged until somebody looks." % adapter)
             return 3
         time.sleep(settings.poll_secs)
+        # A session that ended takes the rail back to idle rather than leaving
+        # it labelled ready against a transport nobody is on.
+        #
+        # ON THE IDLE CADENCE, NOT THE WORKING ONE. Delivering is what has to
+        # keep up with a session; noticing that the last one left does not. A
+        # probe on every working pass would start an interpreter every five
+        # seconds forever, and the only thing it would buy is a log line about
+        # an empty machine arriving sooner. Sweeping a bus with no live handle
+        # costs a few file reads and delivers nothing, so a stale ready label
+        # between probes reaches nobody.
+        if time.time() - probed_at >= settings.idle_poll_secs:
+            adapter, why = resolve_adapter(settings)
+            probed_at = time.time()
 
 
 if __name__ == "__main__":
