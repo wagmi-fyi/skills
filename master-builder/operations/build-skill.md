@@ -20,7 +20,9 @@ Decide: single-file skill (instructions or a decision framework only) or registr
 
 Scan `reference/skill-primitives.md` against the brief: which primitives does the core slice need now, and which are deliberately deferred? Record the deferrals. If a database made the cut, design its schema now — it shapes every operation and script that follows.
 
-**Deliverable:** Primitive selections and deferrals. Schema, if a database is in.
+A skill that presents a credential answers the two questions in the palette's Credentials entry now. The answers pick how the skill gets its token.
+
+**Deliverable:** Primitive selections and deferrals. Schema, if a database is in. The two credential answers, where the skill uses a credential.
 
 ### 3. Design the Registry
 
@@ -55,7 +57,10 @@ Before declaring done, re-read the build against the brief as a skeptic: what di
 - Invoke the skill fresh — does activation orient the agent correctly?
 - Try the trigger phrases — does the description match how the human would ask?
 - If scripts exist: run each with `--help`, verify the JSON output contract
+- If the skill uses a credential, run the token check below
 - Run the core slice once on **real input**, with the human watching the result
+
+The token check proves that the skill's scripts write no token field to disk. The one excused place is the store a skill keeps on a machine with no owner (`reference/runtime-conventions.md`, Secrets). The skill names that place for the check. The check runs over the skill's scripts. Its pass counts only after it fails on a planted violation. The check's own header defines a token field and a write.
 
 ## Execution
 

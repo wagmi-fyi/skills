@@ -87,13 +87,15 @@ Local (per-client)                 → _local-{skill}/ in that client's workspac
 
 **Resolution order: Local → Firm → Core → error.** First match wins at every level — config values, adapters, context entries. Explicit and traceable; no implicit merging.
 
-Each client engagement gets its own workspace carrying its `_local-{skill}/` tier. The local tier's content files are the client's domain knowledge — what the agent learns about the client is written there, not into the core skill. Client credentials follow `reference/runtime-conventions.md` — environment-resolved, never files in any tier.
+Each client engagement gets its own workspace carrying its `_local-{skill}/` tier. The local tier's content files are the client's domain knowledge. What the agent learns about the client is written there, and the core skill holds none of it. Client credentials follow `reference/runtime-conventions.md` (Secrets), and no tier holds one in a file.
 
 Solo, single-client skills skip this pattern entirely.
 
 ## Setup
 
 A skill requiring setup — database creation, credentials, an initial import — designs that path into itself: auto-initialize on activation for simple cases, a dedicated onboarding operation for complex ones.
+
+A skill that needs a first credential walks the person through putting it in place. Where the machine has an owner for that credential, the owner says which steps its provider takes. The person places the value. The conversation carries only the steps.
 
 ## Self-Containment
 

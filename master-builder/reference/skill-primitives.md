@@ -6,7 +6,9 @@ The design palette: which capabilities a skill composes, and the signals that ca
 
 **Scripts** — atomic code for the predictable parts. If a step runs the same way every time, script it: a script spends no tokens and cannot improvise. Markdown is for judgment. Signal: a step re-derived in chat every run, or a result that varies where it must not.
 
-**Adapters** — code at the variability seam. Core scripts run identically for everyone; adapters bridge what differs — a source system's format, a client's API. Most applicable in multi-tenant skills, where they follow the tiers: core adapters every tenant uses, firm adapters shared across some, local adapters for one (`reference/skill-patterns.md`). Credentials environment-resolved per `reference/runtime-conventions.md`. Signal: the same workflow step differs by client or source system.
+**Adapters.** An adapter is the code that handles what differs from one client or source system to the next, such as a file format or an API. It sits between the core scripts and that client or system, so the core scripts stay the same for everyone. Adapters matter most in a multi-tenant skill, where each one sits in a tier (`reference/skill-patterns.md`). An adapter's credential follows the Credentials entry. Signal: the same workflow step differs by client or source system.
+
+**Credentials.** What a skill presents to an outside service to prove it may act. Two questions at design time pick the pattern. Does the credential change when it is used? Can two runs use it at the same moment? The patterns are in `reference/runtime-conventions.md` (Secrets). Signal: a call to an outside service that needs a key or a sign-in.
 
 **Workpapers** — durable run state in `_workpapers/`, period-named, human-readable. Signal: state being reconstructed from memory or scrollback.
 
