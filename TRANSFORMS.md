@@ -52,6 +52,29 @@ installer owns that rewrite. The rule the file states around the line holds
 either way: the default and the installed conf have to name one file, or a
 machine's own ruling reaches nothing.
 
+**T7. The stamp.** The publish writes the source revision into each published
+`SKILL.md`, as `version` under `metadata`, at the end of the front matter:
+
+    metadata:
+      version: "<short commit> <date>"
+
+The commit is the source revision the publish took the skill from, the one the
+pull request body records. The date is that commit's committer date in UTC,
+`YYYY-MM-DD`. A source file that already has a `metadata` block keeps it, and
+the line goes at its end. The source files carry no version line, and nobody
+bumps a number by hand. An installed copy compares its stamp with the one on
+`main`, so a stamp that differs is a newer version. The unit that publishes
+applies T7 with the other transforms.
+
+`bookkeeping` and `qbo` are sourced here, so their stamp is written at the
+merge. The maintainer's merge unit commits it on the pull request's branch as
+the branch's last commit, naming the commit before it: the last one that
+changed the skill's tree. That commit changes the stamp line and nothing else.
+The pull request merges with a merge commit, because a squash replaces the
+commit the stamp names. The merge unit runs `tools/check-front-pages.py` on the
+branch head before the merge and on `main` after it, and a pull request whose
+stamp is missing or stale is refused.
+
 **`.claude-plugin/` is publish-side only.** It is written here and never comes
 from a source tree.
 
@@ -85,3 +108,18 @@ a symlink into a deployment payload and its adapters were not in the skill tree
 at all, so a published copy carried a rail that refused every substrate by name.
 The fix was to move the source into the skill and to resolve the machine's own
 paths through the settings seam, not to strip the rail at publish time.
+
+## The update check is one paragraph
+
+Every published skill opens its activation with the same paragraph, byte for
+byte. It reads the stamp, checks `main` once a day, and acts on the person's
+`UPDATE` word. A skill stands alone once installed, so each front page carries
+its own copy. `tools/check-front-pages.py` is the gate. It reads the front
+pages, refuses a second variant of the paragraph, refuses a missing or
+malformed stamp, checks the stamp of a skill sourced here against its history,
+and holds each front page under the format's 500-line ceiling. A change to the
+paragraph is made in all four sources in one piece of work, and the gate runs
+over the sources too, with `--unstamped` for each source tree.
+
+Its pass counts beside a control: one changed byte in a scratch copy of one
+paragraph has to make it fail.

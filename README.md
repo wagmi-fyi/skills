@@ -66,6 +66,29 @@ match its parent directory, so a rename on the way in breaks the skill.
 Some skills carry their own dependencies or expect a companion skill. Read the `SKILL.md` before
 first use; anything a skill needs is stated there.
 
+## Staying current
+
+Each skill checks for a newer version when it starts, at most once a day. Its
+`SKILL.md` carries a stamp under `metadata`: the commit it was published from,
+and the date. The publish writes it, and nobody bumps a number. The check reads
+the same file on this repository's `main` and compares the two stamps. That is
+one small HTTPS request, with no git needed.
+
+What happens when the stamps differ is yours to choose. Put one word in a file
+named `UPDATE` inside the skill's directory:
+
+| Word | What happens |
+|---|---|
+| `auto` | The agent updates the skill the way you installed it. A clone pulls, a plugin updates through your agent, and a copy is copied again. This is the default, and a skill with no `UPDATE` file does this |
+| `confirm` | The agent asks you once before it takes a new version |
+| `pin` | The agent says nothing and runs the copy you have |
+
+The agent keeps the time of its last check, and the stamp it saw, in
+`.update-check` in the same directory. Delete that file to check at the next
+start. When the check cannot run, or the copy is not yours to change, the agent
+tells you in one line and runs the copy you have. A copy shared by everyone on
+a machine is kept current by whoever runs that machine.
+
 ## Format
 
 These follow the [Agent Skills specification](https://agentskills.io/specification), which is the
