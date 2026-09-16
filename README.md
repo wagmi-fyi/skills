@@ -66,6 +66,66 @@ match its parent directory, so a rename on the way in breaks the skill.
 Some skills carry their own dependencies or expect a companion skill. Read the `SKILL.md` before
 first use; anything a skill needs is stated there.
 
+## Installing for everyone on a machine
+
+On a machine that several people use, install once for all of them. Install one shared copy of
+the plugin in a directory that root owns. Then link each skill from that copy into the
+machine-wide skills directory of each agent on the machine.
+
+The Claude Code binary is installed per user, so root has none of its own. Run the plugin
+commands with your own binary, as root, with `HOME` set to the shared directory:
+
+```
+sudo install -d -m 0755 -o root -g root <shared-dir>
+sudo HOME=<shared-dir> <path-to-your-claude> plugin marketplace add wagmi-fyi/skills
+sudo HOME=<shared-dir> <path-to-your-claude> plugin install wagmi-skills@wagmi
+sudo chmod -R a+rX <shared-dir>
+```
+
+The clone is now at `<shared-dir>/.claude/plugins/marketplaces/wagmi`. Link each skill into
+the machine-wide skills directory of every agent present. Each agent's documentation names
+that directory for your operating system.
+
+```
+clone=<shared-dir>/.claude/plugins/marketplaces/wagmi
+for s in bookkeeping master-builder orchestrate qbo; do
+  sudo ln -sfn "$clone/$s" <machine-skills-dir>/$s
+done
+```
+
+Check the result as another person on the machine. Root and the installer can read files that
+others cannot.
+
+```
+sudo -u <member> -H test -r <machine-skills-dir>/orchestrate/SKILL.md && echo ok
+```
+
+Then have that person start a fresh session and ask for one of the skills by name.
+
+To update, run one command. The links point into the clone, so each person gets the change at
+their next session. The links change only when a skill is added.
+
+```
+sudo HOME=<shared-dir> <path-to-your-claude> plugin marketplace update wagmi
+```
+
+Here, "update the copy the way it was installed" under [Staying current](#staying-current)
+means that command, and the admin runs it. A person's own agent cannot write the shared clone.
+
+On Claude Code, a skill from a plugin carries the plugin's name, as in
+`wagmi-skills:orchestrate`. So a person who also installs the plugin for themselves gets both
+copies, and the two names do not collide.
+
+Other routes fall short for this job:
+
+- A per-user plugin install reaches one person, and the next person to join the machine has
+  no skills.
+- The plugin keys in Claude Code's managed settings file enable a plugin that is already
+  installed. They install nothing.
+- Claude Code's `--plugin-dir` flag lasts for one invocation.
+- Claude Code's plugin seed directory pays off for a plugin that ships hooks, agents or
+  servers. This plugin ships only skills, so the seed directory only adds work.
+
 ## Staying current
 
 Each skill can tell when a newer version of itself is published. When the skill
