@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""session-guard -- is this session's process the live one, or has a newer one replaced it?
+
+THE DEFECT THIS ANSWERS. The desktop app can reconnect a conversation under a
+new process and leave the old process running. Both processes carry one
+session id and both hold the transcript open. The old one goes on taking turns
+whenever something wakes it, and nothing inside it says it was replaced.
+Measured on 2026-09-08: an old process filed a queue item nobody asked for.
+
+  session-guard              answer for the session this command runs inside
+  session-guard --pid <pid>  answer for that process
+
+It prints one word on stdout, live or superseded, and the reason on stderr.
+Exit 0 for live, 1 for superseded, 2 for usage. A session that reads
+superseded stops acting and says so once.
+
+SUPERSEDED means a newer process carries the same session id. Which process is
+newer comes from the kernel's start time for each one, field 22 of
+/proc/<pid>/stat. The pid decides nothing, because pids wrap and get reused.
+
+THE HARNESS'S OWN RECORDS ARE THE SOURCE. A session writes <pid>.json in the
+sessions directory under its config directory. The record names the session id
+and the process's own start time. A record counts only when its pid is
+running, the process belongs to this account, and the kernel's start time for
+that pid equals the one the record carries. Any other record describes a
+process that has gone, whatever the file says.
+
+WHEN NOTHING CAN BE TOLD, THE ANSWER IS LIVE. A command run outside any session,
+or under a harness that keeps no records, has nothing that could replace it.
+Live is the answer that changes nothing, and the reason says why it was given.
+A wrong superseded would stop a working session.
+
+ONE READING, THREE READERS. The wake rail and the sweeper beside it load this
+file as a module and take the same answer from it. So the three agree on which
+process is the live one.
+"""
+
+import datetime
+import json
+import os
+import sys
+
+CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+
+
+def sessions_dir():
+    """Where the harness records the sessions it is running.
+
+    The bus reads the same place, in the same order: the config directory the
+    harness was pointed at, then the one under this account's home.
+    """
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    return os.path.join(base, "sessions")
+
+
+def _stat_fields(pid):
+    """Fields 3 onward of /proc/<pid>/stat, or None when the pid is not running.
+
+    The command name in field 2 can hold spaces and brackets, so the split
+    starts after its last closing bracket.
+    """
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            data = fh.read().decode("utf-8", "replace")
+    except (OSError, ValueError, TypeError):
+        return None
+    return data[data.rfind(")") + 2 :].split()
+
+
+def kernel_start(pid):
+    """The process's start, in clock ticks since boot, as the kernel counts it.
+
+    None when the pid is not running. A zombie has ended and waits only for its
+    parent to collect it, so it answers None too.
+    """
+    fields = _stat_fields(pid)
+    try:
+        if fields[0] == "Z":
+            return None
+        return int(fields[19])
+    except (TypeError, IndexError, ValueError):
+        return None
+
+
+def parent(pid):
+    fields = _stat_fields(pid)
+    try:
+        return int(fields[1])
+    except (TypeError, IndexError, ValueError):
+        return None
+
+
+def _boot_time():
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return int(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def start_utc(ticks):
+    """A start in ticks, as a UTC time a person can read in a log."""
+    bt = _boot_time()
+    if bt is None or ticks is None:
+        return "tick %s" % ticks
+    stamp = datetime.datetime.fromtimestamp(bt + ticks / float(CLK_TCK), datetime.timezone.utc)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def age_secs(ticks):
+    """How long ago a process started, in seconds, from the kernel's uptime."""
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as fh:
+            up = float(fh.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return up - ticks / float(CLK_TCK)
+
+
+def live_records():
+    """Every session record that describes a process of this account running now."""
+    out = []
+    d = sessions_dir()
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return out
+    me = os.geteuid()
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(d, name)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        pid = rec.get("pid")
+        session = rec.get("sessionId")
+        if not isinstance(pid, int) or pid <= 0 or not isinstance(session, str) or not session:
+            continue
+        began = kernel_start(pid)
+        if began is None:
+            continue
+        try:
+            if os.stat("/proc/%d" % pid).st_uid != me:
+                continue
+        except OSError:
+            continue
+        if str(rec.get("procStart", "")).strip() != str(began):
+            continue
+        out.append({
+            "pid": pid,
+            "session": session,
+            "start": began,
+            "kind": rec.get("kind") or "",
+            "name": rec.get("name") or "",
+            "socket": rec.get("messagingSocketPath") or "",
+            "record": path,
+        })
+    return out
+
+
+def generations(session_id, records=None):
+    """The running processes that carry one session id, oldest first."""
+    if records is None:
+        records = live_records()
+    return sorted((r for r in records if r["session"] == session_id),
+                  key=lambda r: (r["start"], r["pid"]))
+
+
+def newest(gens):
+    """The one newest process, or None when there is none or two share a start.
+
+    Two processes started in the same clock tick cannot be ordered by the
+    kernel's clock. Every reader of this answer then does what it did before
+    it could tell generations apart.
+    """
+    if not gens:
+        return None
+    top = gens[-1]
+    if len(gens) > 1 and gens[-2]["start"] == top["start"]:
+        return None
+    return top
+
+
+def caller_pid(records=None):
+    """The nearest process above this one that holds a current session record."""
+    if records is None:
+        records = live_records()
+    by_pid = {r["pid"]: r for r in records}
+    pid, seen = os.getpid(), set()
+    while pid and pid > 1 and pid not in seen:
+        seen.add(pid)
+        if pid in by_pid:
+            return pid
+        pid = parent(pid)
+    return None
+
+
+def describe(r):
+    return "pid %d started %s" % (r["pid"], start_utc(r["start"]))
+
+
+def verdict(pid=None):
+    """(word, reason) for one process, or for the session this runs inside."""
+    records = live_records()
+    where = sessions_dir()
+    if pid is None:
+        pid = caller_pid(records)
+        if pid is None:
+            return "live", ("no process above this command holds a current session record "
+                            "under %s, so nothing here can be replaced" % where)
+    mine = [r for r in records if r["pid"] == pid]
+    if not mine:
+        return "live", ("pid %d holds no current session record under %s, so nothing "
+                        "can replace it" % (pid, where))
+    me = mine[0]
+    gens = generations(me["session"], records)
+    sid = me["session"][:8]
+    newer = [r for r in gens if r["start"] > me["start"]]
+    if newer:
+        return "superseded", ("session %s runs in a newer process, %s. This process is "
+                              "%s" % (sid, describe(newer[-1]), describe(me)))
+    tied = [r for r in gens if r["pid"] != pid and r["start"] == me["start"]]
+    if tied:
+        return "live", ("session %s runs in %d processes that started in the same clock "
+                        "tick, so none of them is newer: %s"
+                        % (sid, len(tied) + 1, "; ".join(describe(r) for r in [me] + tied)))
+    older = [r for r in gens if r["pid"] != pid]
+    if older:
+        return "live", ("this process, %s, is the newest of %d carrying session %s. "
+                        "Older: %s" % (describe(me), len(gens), sid,
+                                       "; ".join(describe(r) for r in older)))
+    return "live", "this process, %s, is the only one carrying session %s" % (describe(me), sid)
+
+
+def main(argv):
+    pid = None
+    args = list(argv)
+    if args and args[0] in ("-h", "--help"):
+        sys.stderr.write(__doc__)
+        return 2
+    if args and args[0] == "--pid":
+        if len(args) != 2 or not args[1].isdigit():
+            sys.stderr.write("usage: session-guard [--pid <pid>]\n")
+            return 2
+        pid = int(args[1])
+    elif args:
+        sys.stderr.write("usage: session-guard [--pid <pid>]\n")
+        return 2
+    word, reason = verdict(pid)
+    print(word)
+    sys.stderr.write(reason + "\n")
+    return 0 if word == "live" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -27,5 +27,8 @@ Builds/research parallelize freely (disjoint worktrees, **no locking**). **Only 
 - **Staleness:** leases carry holder + timestamp + TTL (default 30 min). `bus locks` shows age/expiry; a past-TTL lease is auto-taken-over on the next `bus lock`, or force-released with `bus unlock <name> --steal` (logged) when you're sure the holder is dead.
 - **Coarser fallback:** if naming resources is overkill for a repo, lock the repo itself (`bus lock <repo>`) — same primitive, less parallelism.
 
+## Public remotes: the name gate
+A push to a public remote runs the machine's name gate first. The gate is a program kept on the machine with a private list of names that must never reach a public repository, and it refuses a commit or a push that carries one. Its pass counts only beside a planted control: a listed name placed in a scratch copy has to make it fail. A charter whose unit pushes to a public remote names the gate, and the report carries both results.
+
 ## In the loop
 The orchestrator takes the relevant lease at its **serialization point** (`run.md`), holds it across the one commitment, and releases on success **or** rollback — recording the rev + rollback path in the workpaper. Holding a lease is itself a reversible, recorded action (it never needs a human gate).

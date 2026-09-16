@@ -22,12 +22,22 @@ THE LAW THIS RAIL RUNS UNDER.
   3. SAME USER. A handle is nudged only by a process running as the account
      that registered it. Delivery into somebody else's session is a different
      act with a different consent story, and this program refuses it.
-  4. NEVER RESURRECT. A handle whose process is gone is refused. Bringing a
-     recorded session back is a fork, not a wake, and a fork is two divergent
-     copies of one unit.
+  4. NEVER RESURRECT. A handle whose session has no running process is
+     refused. Bringing a recorded session back is a fork, not a wake, and a
+     fork is two divergent copies of one unit.
   5. NEVER RETRY INTO SPAM. One nudge per handle per newest-message-id. A
      session that was nudged and did not drain gets no second nudge until new
      mail actually arrives.
+
+THE NEWEST GENERATION GETS THE NUDGE. A reconnect can leave a session running
+in two processes, and the pid a handle registered with may be the old one or a
+dead one. So where the harness records its sessions, the nudge goes to the
+newest running process that carries the handle's session id, newest by the
+kernel's start time. The older ones are logged by pid and start time and get
+nothing. `session-guard`, beside this file, is the one reading of which
+process is newest; this program loads it, and so does the sweeper. Where no
+record names the session, the pid the handle registered with decides, as it
+always did.
 
 WHAT IS CORE AND WHAT IS AN ADAPTER. This file knows about buses, accounts,
 processes and one sentence. It knows nothing about how a session is reached.
@@ -52,11 +62,14 @@ watcher stays up, re-checks on its own interval and logs one line when the state
 turns over. A missing adapter is the other case: nothing here knows how to reach
 a session at all, no amount of waiting changes it, and that is still a wall.
 
-EXIT CODES. 0 ok. 1 the sentence law is broken. 2 usage. 3 no adapter at all, or
-the adapter says its transport changed under it -- both walls, both loud.
+EXIT CODES. 0 ok. 1 the sentence law is broken. 2 usage. 3 no adapter at all,
+the adapter says its transport changed under it, or session-guard is missing
+beside this program -- all walls, all loud.
 """
 
 import argparse
+import importlib.machinery
+import importlib.util
 import json
 import os
 import pwd
@@ -373,6 +386,53 @@ def liveness(rec):
     return "alive", "pid %d" % pid
 
 
+# ---------------------------------------------------------------- generations
+#
+# session-guard is loaded from beside this file, so the rail and the guard read
+# one answer about which process is newest. It is loaded without writing
+# bytecode: this file runs from a skill tree and from the machine's bin directory,
+# and a cache written into either is a file nobody shipped.
+GUARD_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "session-guard")
+GEN = None
+GEN_WHY = "session-guard was not loaded"
+
+
+def load_generations():
+    """The guard as a module, or None with the reason it could not be loaded."""
+    if not os.path.isfile(GUARD_PATH):
+        return None, "no session-guard at %s" % GUARD_PATH
+    sys.dont_write_bytecode = True
+    try:
+        loader = importlib.machinery.SourceFileLoader("session_guard", GUARD_PATH)
+        spec = importlib.util.spec_from_loader("session_guard", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+    except Exception as exc:  # a broken guard is reported, never half-used
+        return None, "session-guard at %s did not load: %s: %s" % (
+            GUARD_PATH, type(exc).__name__, exc)
+    for name in ("generations", "newest", "start_utc"):
+        if not callable(getattr(mod, name, None)):
+            return None, "session-guard at %s has no %s()" % (GUARD_PATH, name)
+    return mod, ""
+
+
+def target_generation(rec):
+    """(newest, superseded) for a handle's session, or (None, []) to fall back.
+
+    The fallback is the registered pid and the liveness test above. It covers a
+    handle with no session id, a harness that records no sessions, a session
+    no running process carries, and two newest processes started in one tick.
+    """
+    session = rec.get("session") or ""
+    if not session or GEN is None:
+        return None, []
+    gens = GEN.generations(session)
+    top = GEN.newest(gens)
+    if top is None:
+        return None, []
+    return top, [g for g in gens if g["pid"] != top["pid"]]
+
+
 def unread_count(bus_dir, handle):
     inbox = os.path.join(bus_dir, "inbox", "%s.jsonl" % handle)
     try:
@@ -634,19 +694,37 @@ def sweep(settings, adapter, dry_run=False):
                 )
                 continue
 
-            live, why = liveness(rec)
-            if live != "alive":
-                results.append(
-                    record(settings, bus_dir, handle, newest, "refused",
-                           "%s: %s" % (live, why), dry_run)
-                )
-                continue
+            # THE NEWEST PROCESS CARRYING THE SESSION, where one is recorded.
+            # Its record already proved it is running, is this account's, and
+            # is the process the record describes, so the registered pid's
+            # liveness says nothing more about it.
+            top, superseded = target_generation(rec)
+            if top is not None:
+                pid = top["pid"]
+                if superseded:
+                    log("info", "%s on %s: session %s runs in %d processes. The nudge "
+                                "goes to the newest, %s. Superseded: %s. The handle "
+                                "registered pid %s"
+                                % (handle, bus_dir, top["session"][:8], len(superseded) + 1,
+                                   "pid %d started %s" % (pid, GEN.start_utc(top["start"])),
+                                   "; ".join("pid %d started %s" % (g["pid"], GEN.start_utc(g["start"]))
+                                             for g in superseded),
+                                   rec.get("pid")))
+            else:
+                live, why = liveness(rec)
+                if live != "alive":
+                    results.append(
+                        record(settings, bus_dir, handle, newest, "refused",
+                               "%s: %s" % (live, why), dry_run)
+                    )
+                    continue
+                pid = rec.get("pid")
 
             payload = {
                 "handle": handle,
                 "bus_dir": bus_dir,
                 "session": rec.get("session") or "",
-                "pid": rec.get("pid"),
+                "pid": pid,
                 "owner": owner,
                 "address": rec.get("address") or "",
                 "pane": rec.get("pane") or "",
@@ -766,6 +844,8 @@ def cmd_check(settings, args):
             idle.append(why["reason"])
         else:
             blocking.append(why["reason"])
+    if GEN is None:
+        blocking.append(GEN_WHY)
     buses = settings.bus_dirs()
     shared, shared_src = shared_bus()
     if not buses:
@@ -789,6 +869,8 @@ def cmd_check(settings, args):
         "poll_secs": settings.poll_secs,
         "idle_poll_secs": settings.idle_poll_secs,
         "watchers": watcher_pids(),
+        "session_guard": GUARD_PATH,
+        "session_guard_loaded": GEN is not None,
         "sentence": nudge_text("<bus_dir>"),
         "ready": not blocking,
         "blocking": blocking,
@@ -846,9 +928,19 @@ def main():
                    "bus directory. See `bus-nudge --law`.")
         return 1
 
+    # The generation reader is loaded before anything is delivered, every run.
+    # Without it a nudge would go to whichever pid the handle registered, which
+    # is the old process after a reconnect. `--check` reports the gap; every
+    # other mode refuses on it.
+    global GEN, GEN_WHY
+    GEN, GEN_WHY = load_generations()
     settings = Settings(args)
     if args.check:
         return cmd_check(settings, args)
+    if GEN is None:
+        log("err", "refusing to run: %s. It decides which process of a session gets the "
+                   "nudge, and it ships beside this program." % GEN_WHY)
+        return 3
 
     if settings.enabled != "yes":
         log("info", "bus-nudge is turned off in %s" % settings.conf_path)

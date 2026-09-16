@@ -26,6 +26,12 @@ Do **not** pause for permission to do reversible, planned, intended work — tha
 | External action the agent can itself undo | the in-system undo (delete the record you created, unpublish, restore from the system's trash/history) — **reversible → proceed** |
 | Truly irreversible (sent message, payment, destructive delete, no recovery) | **none possible → pause (human-only)** |
 
+## Reading a secret
+
+A secret is read with the broker token taken from the machine's own credential file inside the same command, never from a variable the session carries. A credential sitting in a session's environment is one expansion away from a durable transcript, and deleting the transcript later undoes nothing. The machine's own conventions name the file and the command that reads it; ask them rather than guessing a path.
+
+This binds the orchestrator and every delegate. It is the same law as "no credential in a message body, ever" (`session-bus.md`), one layer down: what a session never holds, a session cannot spill.
+
 ## Recognizing a crossroads (the test)
 Ask: *"Is there more than one defensible option here, and does the plan/intent fail to pick one?"*
 - **Yes** → crossroads → notify + **pause this unit** (siblings continue) with the options + your recommendation framed; resume on the ruling.
