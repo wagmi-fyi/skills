@@ -365,7 +365,7 @@ def create_client(credentials: Optional[Dict[str, str]] = None) -> Tuple[Optiona
         return None, {
             "success": False,
             "error": "MISSING_PACKAGES",
-            "message": "Missing required packages. Install with: pip install python-quickbooks intuitlib"
+            "message": "Missing required packages. Install them from the skill's requirements.txt, which names intuit-oauth, the package that provides intuitlib."
         }
 
     if credentials is None:
