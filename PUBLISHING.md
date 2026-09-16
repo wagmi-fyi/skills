@@ -51,6 +51,19 @@ time. The next person edits the unstripped file and the word comes back.
 A published file names no path from one machine. A machine sets its own paths
 in its settings file.
 
+## Client names
+
+No published file names a client of ours, or a client's product. Those names
+stay out of the grep, because the pattern itself is public. A second check runs
+on our own machines. It reads a list kept there and never published. Our clones
+run it as two git hooks. One refuses a commit whose added lines carry a listed
+name. A push that carries such a commit is refused too, and that hook reads the
+commit message and author as well. A publish runs the same check over the whole
+tree before it sends. Prove it the same way as the grep: plant a listed name in
+a scratch copy and check that it fails.
+
+The list and the hooks exist only on our machines.
+
 ## The activation paragraph and the check script
 
 Every skill opens its activation with the same paragraph and carries the same
