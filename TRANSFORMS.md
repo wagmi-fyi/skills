@@ -52,6 +52,9 @@ installer owns that rewrite. The rule the file states around the line holds
 either way: the default and the installed conf have to name one file, or a
 machine's own ruling reaches nothing.
 
+`orchestrate/scripts/session-sweep` reads the same conf, and its default line
+gets the same rewrite.
+
 **T7. The stamp.** The publish writes the source commit into each published
 `SKILL.md`, under `metadata` at the end of the front matter:
 
