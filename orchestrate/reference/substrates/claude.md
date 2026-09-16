@@ -110,6 +110,10 @@ sends to the newest by the kernel's start time and logs the others.
 a session which of the two it is. A reconnect that also changes the session id
 escapes all three.
 
+**It runs on Linux only.** It finds a session's process in `/proc` and refuses
+to start on a machine without one. On a Mac, read the board by hand with
+`bus handles` and `bus inbox <handle>`.
+
 `bus-nudge --check` reports the adapter it resolved and the pids of any watcher
 already running for this account. Where the rail runs as a machine service, the
 deployment that installed it puts its own reference beside it, and that file says

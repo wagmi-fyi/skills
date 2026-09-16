@@ -62,9 +62,14 @@ watcher stays up, re-checks on its own interval and logs one line when the state
 turns over. A missing adapter is the other case: nothing here knows how to reach
 a session at all, no amount of waiting changes it, and that is still a wall.
 
+LINUX ONLY. The rail finds a session's process in /proc, and a machine without
+one has no process table this program can read. It refuses there at start, in
+every mode but `--law`. BUS_NUDGE_PROC_ROOT moves the table it reads, for a
+control; the default is /proc.
+
 EXIT CODES. 0 ok. 1 the sentence law is broken. 2 usage. 3 no adapter at all,
-the adapter says its transport changed under it, or session-guard is missing
-beside this program -- all walls, all loud.
+the adapter says its transport changed under it, session-guard is missing
+beside this program, or the machine has no /proc. Each of those is a wall.
 """
 
 import argparse
@@ -325,10 +330,28 @@ def log(level, msg):
 # chances to nudge a stranger.
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 
+# THE ONE PLACE THE PROCESS TABLE IS NAMED. Every read below goes through
+# proc_path(), and main() calls no_proc() before any of them runs, so a machine
+# without /proc is refused once, by name. The adapters inherit the variable.
+PROC_ROOT = os.environ.get("BUS_NUDGE_PROC_ROOT") or "/proc"
+
+
+def proc_path(*parts):
+    return os.path.join(PROC_ROOT, *[str(p) for p in parts])
+
+
+def no_proc():
+    """The refusal for a machine with no process table, or "" when it has one."""
+    if os.path.isfile(proc_path("stat")):
+        return ""
+    return ("refusing to run: this machine (%s) has no process table at %s. The rail "
+            "reads it to find a session's process and runs on Linux only. Check the "
+            "board by hand with bus inbox <handle>." % (sys.platform, PROC_ROOT))
+
 
 def boot_time():
     try:
-        with open("/proc/stat", "r", encoding="utf-8") as fh:
+        with open(proc_path("stat"), "r", encoding="utf-8") as fh:
             for line in fh:
                 if line.startswith("btime "):
                     return int(line.split()[1])
@@ -348,7 +371,7 @@ def proc_start_epoch(pid):
     if bt is None:
         return None
     try:
-        with open("/proc/%d/stat" % pid, "rb") as fh:
+        with open(proc_path(pid, "stat"), "rb") as fh:
             data = fh.read().decode("utf-8", "replace")
     except OSError:
         return None
@@ -369,11 +392,11 @@ def parse_ts(text):
 
 
 def liveness(rec):
-    """alive | gone | unrecorded, decided from the bus record and /proc alone."""
+    """alive | gone | unrecorded, decided from the bus record and the process table alone."""
     pid = rec.get("pid")
     if not isinstance(pid, int) or pid <= 0:
         return "unrecorded", "the handle carries no pid, so nothing says where it is"
-    if not os.path.isdir("/proc/%d" % pid):
+    if not os.path.isdir(proc_path(pid)):
         return "gone", "pid %d is not running" % pid
     started = parse_ts(rec.get("started", "")) or 0
     began = proc_start_epoch(pid)
@@ -888,13 +911,13 @@ def watcher_pids():
     """
     out = []
     me = os.geteuid()
-    for entry in os.listdir("/proc"):
+    for entry in os.listdir(PROC_ROOT):
         if not entry.isdigit() or int(entry) == os.getpid():
             continue
         try:
-            if os.stat("/proc/" + entry).st_uid != me:
+            if os.stat(proc_path(entry)).st_uid != me:
                 continue
-            with open("/proc/%s/cmdline" % entry, "rb") as fh:
+            with open(proc_path(entry, "cmdline"), "rb") as fh:
                 argv = fh.read().decode("utf-8", "replace").split("\0")
         except OSError:
             continue
@@ -927,6 +950,12 @@ def main():
         log("err", "refusing to run: the delivered sentence interpolates more than the "
                    "bus directory. See `bus-nudge --law`.")
         return 1
+
+    # The process table is checked before anything reads it, every run.
+    refusal = no_proc()
+    if refusal:
+        log("err", refusal)
+        return 3
 
     # The generation reader is loaded before anything is delivered, every run.
     # Without it a nudge would go to whichever pid the handle registered, which

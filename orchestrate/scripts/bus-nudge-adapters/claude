@@ -182,7 +182,7 @@ def deliver(payload):
         # No record and no process is an ended session. No record WITH a live
         # process is the transport moving under us, and those are different
         # findings.
-        if pid and os.path.isdir("/proc/%d" % pid):
+        if pid and os.path.isdir(os.path.join(os.environ.get("BUS_NUDGE_PROC_ROOT") or "/proc", str(pid))):
             out("failed", "the transport changed",
                 "pid %d is running but has no session record at %s" % (pid, rec_path))
         out("refused", "the session has ended", "no record at %s" % rec_path)
