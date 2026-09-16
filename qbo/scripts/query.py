@@ -17,6 +17,9 @@ Examples:
 
     # Paginate through results
     python query.py --entity=Bill --max_results=50 --start_position=51
+
+    # Read the company's preferences, which are one record
+    uv run query.py --entity=Preferences
 """
 
 import argparse
@@ -169,6 +172,84 @@ def build_query(entity_name: str, where: Optional[str], start_position: int, max
     return query
 
 
+def is_single_object(entity_class) -> bool:
+    """True for an entity the SDK reads whole and cannot query, such as Preferences."""
+    return not hasattr(entity_class, 'query')
+
+
+def run_query(entity_class, select: str, c) -> List[Any]:
+    """
+    Run a select and return its records.
+
+    QuickBooks can answer an entity that exists once per company, such as
+    CompanyInfo, with one object where a list is expected. That object is one
+    record. The SDK's own query() iterates it as a list and fails, so the
+    answer is read here.
+
+    Args:
+        entity_class: SDK entity class.
+        select: Query string.
+        c: QBO client.
+
+    Returns:
+        List of SDK entity objects.
+    """
+    json_data = c.query(select)
+    name = getattr(entity_class, 'qbo_json_object_name', '') or entity_class.qbo_object_name
+    found = json_data.get('QueryResponse', {}).get(name)
+    if found is None:
+        return []
+    if isinstance(found, dict):
+        found = [found]
+    return [entity_class.from_json(item) for item in found]
+
+
+def count_all(entity_class, where: Optional[str], c) -> Optional[int]:
+    """
+    Count the records a query matches.
+
+    A filtered count runs the query and counts the rows, so it may be
+    truncated at 1000. An unfiltered count asks QuickBooks, and counts the rows
+    when the answer carries no count.
+
+    Returns:
+        The count, or None when QuickBooks gives none and the rows fill a page.
+    """
+    if not where:
+        total = entity_class.count(qb=c)
+        if total is not None:
+            return total
+    select = f"SELECT * FROM {entity_class.qbo_object_name}"
+    if where:
+        select += f" WHERE {where}"
+    rows = len(run_query(entity_class, select + " MAXRESULTS 1000", c))
+    if rows >= 1000 and not where:
+        return None
+    return rows
+
+
+# Exceptions that mean query.py itself went wrong while reading an answer.
+# API_ERROR sends a caller to QuickBooks or to the credentials, and neither
+# helps with these.
+SKILL_FAULTS = (TypeError, AttributeError, KeyError, IndexError, NameError)
+
+
+def failure(e: Exception) -> Dict[str, Any]:
+    """The output for an exception raised while reading from QuickBooks."""
+    if isinstance(e, SKILL_FAULTS):
+        return {
+            "success": False,
+            "error": "SKILL_ERROR",
+            "message": f"fault inside query.py while reading the answer: {type(e).__name__}: {e}"
+        }
+    return {
+        "success": False,
+        "error": "API_ERROR",
+        "message": str(e),
+        "retry_attempted": True
+    }
+
+
 def entity_to_dict(entity) -> Dict[str, Any]:
     """
     Convert QBO entity object to dictionary.
@@ -247,7 +328,48 @@ def main():
         client_holder = ClientHolder(client)
 
         # Determine query type and execute
-        if args.id:
+        if is_single_object(entity_class):
+            # One record per company, read from its own endpoint
+            if args.id or args.where:
+                output_json({
+                    "success": False,
+                    "error": "INVALID_ARGUMENT",
+                    "message": f"{args.entity} is one record per company. It takes no --id or --where."
+                })
+                sys.exit(1)
+
+            def fetch_single(c):
+                return entity_class.get(qb=c)
+
+            try:
+                record = retry_with_backoff(
+                    lambda: execute_with_auth_retry(fetch_single, client_holder)
+                )
+            except Exception as e:
+                output_json(failure(e))
+                sys.exit(1)
+
+            found = 1 if record is not None else 0
+            if args.count_only:
+                output_json({
+                    "success": True,
+                    "entity": args.entity,
+                    "count": found,
+                    "count_note": None,
+                    "query": f"GET {args.entity} (count)"
+                })
+            else:
+                output_json({
+                    "success": True,
+                    "entity": args.entity,
+                    "count": found,
+                    "total_count": found,
+                    "truncated": False,
+                    "query": f"GET {args.entity}",
+                    "data": [entity_to_dict(record)] if record is not None else []
+                })
+
+        elif args.id:
             # Fetch single record by ID
             def fetch_by_id(c):
                 return entity_class.get(args.id, qb=c)
@@ -273,26 +395,13 @@ def main():
                 })
 
             except Exception as e:
-                output_json({
-                    "success": False,
-                    "error": "API_ERROR",
-                    "message": str(e),
-                    "retry_attempted": True
-                })
+                output_json(failure(e))
                 sys.exit(1)
 
         elif args.count_only:
             # Count only
             def count_entities(c):
-                if args.where:
-                    # For filtered count, run query and count results
-                    # Note: May be truncated at 1000 for large result sets
-                    query = f"SELECT * FROM {args.entity} WHERE {args.where} MAXRESULTS 1000"
-                    result = entity_class.query(query, qb=c)
-                    return len(result) if result else 0
-                else:
-                    # Unfiltered count uses SDK's count() method
-                    return entity_class.count(qb=c)
+                return count_all(entity_class, args.where, c)
 
             try:
                 count = retry_with_backoff(
@@ -307,12 +416,7 @@ def main():
                 })
 
             except Exception as e:
-                output_json({
-                    "success": False,
-                    "error": "API_ERROR",
-                    "message": str(e),
-                    "retry_attempted": True
-                })
+                output_json(failure(e))
                 sys.exit(1)
 
         else:
@@ -320,18 +424,10 @@ def main():
             query = build_query(args.entity, args.where, args.start_position, args.max_results)
 
             def execute_query(c):
-                return entity_class.query(query, qb=c)
+                return run_query(entity_class, query, c)
 
             def get_total_count(c):
-                if args.where:
-                    # For filtered count, run query and count results
-                    # Note: May be truncated at 1000 for large result sets
-                    count_query = f"SELECT * FROM {args.entity} WHERE {args.where} MAXRESULTS 1000"
-                    result = entity_class.query(count_query, qb=c)
-                    return len(result) if result else 0
-                else:
-                    # Unfiltered count uses SDK's count() method
-                    return entity_class.count(qb=c)
+                return count_all(entity_class, args.where, c)
 
             try:
                 records = retry_with_backoff(
@@ -345,7 +441,11 @@ def main():
                 )
 
                 result_count = len(records)
-                truncated = result_count < total_count and result_count >= args.max_results
+                if total_count is None:
+                    # No count from QuickBooks: a full page may have more behind it
+                    truncated = result_count >= args.max_results
+                else:
+                    truncated = result_count < total_count and result_count >= args.max_results
 
                 output_json({
                     "success": True,
@@ -358,12 +458,7 @@ def main():
                 })
 
             except Exception as e:
-                output_json({
-                    "success": False,
-                    "error": "API_ERROR",
-                    "message": str(e),
-                    "retry_attempted": True
-                })
+                output_json(failure(e))
                 sys.exit(1)
 
     except Exception as e:
