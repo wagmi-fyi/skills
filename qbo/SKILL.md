@@ -75,9 +75,9 @@ Nobody has these on a first install. [`reference/credential-setup.md`](reference
 
 **The environment wins.** When `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_ACCESS_TOKEN`, `QBO_REFRESH_TOKEN` and `QBO_REALM_ID` are already set, no file is read and none has to exist. A secrets manager that injects at invocation lands here, and it is the only arrangement with no plaintext credential sitting on disk. Prefer it.
 
-**Then the token service, on a machine that runs one.** The skill asks the service for this company's token and uses it. When QuickBooks refuses a token, the skill tells the service which one and takes the fresh one. The client secret and the refresh token stay inside the service, and the skill writes no token to a file. It still reads the company ID and the environment name from the settings file.
+**Then the settings file decides, on a machine that runs a token service.** A settings file that holds any token value is the credentials file, and the skill does not ask the service. A file that holds only the company ID and the environment name sends the skill to the service, and so does a machine with no settings file. On that path the skill asks the service for this company's token and uses it. When QuickBooks refuses a token, the skill tells the service which one and takes the fresh one. The client secret and the refresh token stay inside the service, and the skill writes no token to a file. The row is named at seeding. When its name is anything but `intuit/<realm id>`, the settings file carries `QBO_TOKEN_ROW` with that name.
 
-Otherwise the skill looks for a `.env`, first existing file winning:
+The skill looks for the settings file in this order, and the first existing file wins:
 
 1. **`QBO_ENV_PATH`**, an explicit path. The override for any layout the rules below miss.
 2. **`BOOKKEEPING_CONFIG_PATH`** → `{local_dir}/adapters/.env`. When bookkeeping is in use, both read and write the same file, so a refreshed token cannot drift between them.

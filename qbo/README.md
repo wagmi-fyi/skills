@@ -10,7 +10,7 @@ The bookkeeping skill uses this one for its QuickBooks work. It also stands alon
 |---|---|
 | **Runtime** | Python 3.12 or newer. |
 | **Packages** | Three, pinned in `requirements.txt`. The QuickBooks SDK, Intuit's OAuth client, and a `.env` loader. |
-| **Credentials** | A QuickBooks Online OAuth app: client id, client secret, access token, refresh token, and the realm id of the company. On a CommonClaw machine that runs a token service, the service holds them and the skill needs the realm id alone. |
+| **Credentials** | A QuickBooks Online OAuth app: client id, client secret, access token, refresh token, and the realm id of the company. On a CommonClaw machine that runs a token service, the service can hold them, and the settings file then holds identifiers only. |
 | **Network** | Intuit's API, and nothing else. |
 
 Getting those five values means registering an app on the Intuit Developer Portal, passing a short compliance questionnaire, and running one consent flow as an admin of the QuickBooks company. `reference/credential-setup.md` walks through all of it, and your agent can drive it with you. Budget about 15 minutes.

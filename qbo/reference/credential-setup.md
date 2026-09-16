@@ -208,6 +208,7 @@ The realm ID is also visible in the QuickBooks URL when the company is open.
 2. Put three values in that vault item: the client ID, the client secret, and the refresh token from the Playground step above. Paste each from Intuit's own pages. Do not type a value into a chat or a shell.
 3. A claw admin runs the seed command the steps name.
 4. `token check intuit/<company ID>` confirms it.
+5. Take the client ID, the client secret and both tokens out of the settings file. After the seed it holds `QBO_REALM_ID` and `QBO_ENVIRONMENT`, and nothing else. When the row name in step 1 is anything but `intuit/<company ID>`, the file also holds `QBO_TOKEN_ROW` with that name. The skill reads a settings file that holds any token value in preference to the service.
 
 QuickBooks' login flow needs the client secret, which the service's browser flow does not carry, so this is done by paste. On a laptop with no service, use the settings file as above.
 
