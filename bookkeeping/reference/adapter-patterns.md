@@ -204,6 +204,8 @@ if not API_KEY:
 
 Secrets live in `{local_dir}/adapters/.env` (gitignored). Fail fast if missing.
 
+On a CommonClaw machine that runs a token service, the qbo skill takes QBO tokens from the service, so this file carries only `QBO_REALM_ID` and `QBO_ENVIRONMENT` for QBO, and no adapter writes a token to it.
+
 **Firm-level credentials:** When a firm shares app-level credentials across clients (e.g., QBO OAuth app client_id/secret), these live in `{firm_root}/adapters/.env`. During client onboarding, firm app credentials are copied into the client's `.env` so scripts only need to read one file. The firm `.env` remains the source of truth — if app credentials rotate, update the firm file and re-copy to active clients.
 
 ---
