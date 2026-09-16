@@ -75,7 +75,7 @@ Nobody has these on a first install. [`reference/credential-setup.md`](reference
 
 **The environment wins.** When `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_ACCESS_TOKEN`, `QBO_REFRESH_TOKEN` and `QBO_REALM_ID` are already set, no file is read and none has to exist. A secrets manager that injects at invocation lands here, and it is the only arrangement with no plaintext credential sitting on disk. Prefer it.
 
-**Then the token service, on a CommonClaw machine that runs one.** The machine runs one when the `token` command is on PATH and the service answers. The skill asks it for the row `intuit/{realm id}` and uses the access token it hands back. On a 401 the skill reports the refused token by its fingerprint and takes the token the service answers, once. The client secret and the refresh token stay inside the service, and the skill writes no token to disk. From the files below it reads `QBO_REALM_ID` and `QBO_ENVIRONMENT` alone, when the environment does not set them. The client is the machine's own library in `/opt/commonclaw/lib/python`, and the skill carries no copy of it.
+**Then the token service, on a machine that runs one.** The skill asks the service for this company's token and uses it. When QuickBooks refuses a token, the skill tells the service which one and takes the fresh one. The client secret and the refresh token stay inside the service, and the skill writes no token to a file. It still reads the company ID and the environment name from the settings file.
 
 Otherwise the skill looks for a `.env`, first existing file winning:
 
@@ -88,9 +88,7 @@ No candidate is inside this skill's directory, and none should be. A credential 
 
 When nothing resolves, the error names the variables it wanted and every path it tried. The first stderr line of every run names the path the skill took.
 
-### Seeding the token service
-
-A person seeds the row once, on the machine. `token add intuit/{realm id} --metadata https://developer.api.intuit.com/.well-known/openid_configuration --path paste` writes it and prints the steps. A sandbox company takes `openid_sandbox_configuration` in that URL. The steps name a vault item. The person gives it the fields `client_id`, `client_secret` and `refresh_token`, and pastes each value from Intuit's own pages, with the refresh token from the Playground step in [`reference/credential-setup.md`](reference/credential-setup.md). Nobody types a value into a conversation or a shell. A claw-admin then runs the seed door the steps name, from their own login, and `token check intuit/{realm id}` proves it. The browser paths pass no client secret, and Intuit's token endpoint requires one, so Intuit takes the paste path. A laptop keeps the `.env` path.
+On a machine that runs a token service, the token is seeded into the service once. `reference/credential-setup.md` says how.
 
 ### Tokens
 

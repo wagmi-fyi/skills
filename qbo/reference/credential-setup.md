@@ -202,6 +202,15 @@ conversation.
 
 The realm ID is also visible in the QuickBooks URL when the company is open.
 
+## On a machine that runs a token service
+
+1. Run `token add intuit/<company ID> --metadata https://developer.api.intuit.com/.well-known/openid_configuration --path paste`. For a sandbox company use `openid_sandbox_configuration`. The command prints the remaining steps and names a vault item.
+2. Put three values in that vault item: the client ID, the client secret, and the refresh token from the Playground step above. Paste each from Intuit's own pages. Do not type a value into a chat or a shell.
+3. A claw admin runs the seed command the steps name.
+4. `token check intuit/<company ID>` confirms it.
+
+QuickBooks' login flow needs the client secret, which the service's browser flow does not carry, so this is done by paste. On a laptop with no service, use the settings file as above.
+
 ## Step 7 — Hand off the bundle · [AGENT] and [HUMAN]
 
 Five values plus the environment flag:
@@ -220,9 +229,7 @@ The variable names this skill reads are in
 manager and reach the skill through the environment, and no file exists. If a `.env`
 is used instead, the human confirms it is covered by `.gitignore` at any depth, and it
 goes at one of the paths in `SKILL.md` under "Where the skill looks", never inside the
-skill directory. On a CommonClaw machine that runs a token service, the client ID, the
-client secret and the refresh token go into the service's vault item instead, as
-`SKILL.md` says under "Seeding the token service".
+skill directory.
 
 ## Token lifetimes
 

@@ -56,7 +56,7 @@ don't have.
 
 ## Manual install
 
-Clone the repository, copy the `qbo` folder into whichever skills directory your agent reads, and install the pins from `requirements.txt` into the environment you run scripts with. For credentials, either export the five `QBO_` variables from your secrets manager, or copy `scripts/.env.example` to one of the paths listed in `SKILL.md` under "Where the skill looks" and fill it in. Never inside the skill directory, never in git. `reference/credential-setup.md` covers getting the values in the first place. On a CommonClaw machine that runs a token service, seed the service instead. `SKILL.md` under "Seeding the token service" says how.
+Clone the repository, copy the `qbo` folder into whichever skills directory your agent reads, and install the pins from `requirements.txt` into the environment you run scripts with. For credentials, either export the five `QBO_` variables from your secrets manager, or copy `scripts/.env.example` to one of the paths listed in `SKILL.md` under "Where the skill looks" and fill it in. Never inside the skill directory, never in git. `reference/credential-setup.md` covers getting the values in the first place. On a CommonClaw machine that runs a token service, seed the service instead. `reference/credential-setup.md` says how.
 
 ## First run
 
