@@ -20,6 +20,15 @@ Examples:
         --class_id="1571398" \
         --bill_email="buyer@example.com" \
         --line_items='[{"description": "Products", "amount": 250.00, "item_id": "1"}]'
+
+    # Ship this order to an address other than the customer's default
+    python create_invoice.py \
+        --customer_id=123 \
+        --invoice_num="1700711" \
+        --txn_date="2026-03-01" \
+        --due_date="2026-03-31" \
+        --ship_addr='{"line1": "Example Store 12", "line2": "100 Sample Street", "city": "Springfield", "state": "IL", "zip": "62701", "country": "US"}' \
+        --line_items='[{"description": "Products", "amount": 250.00, "item_id": "1"}]'
 """
 
 import argparse
@@ -29,6 +38,17 @@ import time
 from typing import Any, Dict, Optional
 
 import qbo_client
+
+# --ship_addr keys, and the Invoice.ShipAddr field each one sets.
+SHIP_ADDR_FIELDS = {
+    'line1': 'Line1',
+    'line2': 'Line2',
+    'line3': 'Line3',
+    'city': 'City',
+    'state': 'CountrySubDivisionCode',
+    'zip': 'PostalCode',
+    'country': 'Country',
+}
 
 
 class ClientHolder:
@@ -127,6 +147,31 @@ def check_duplicate_invoice(client_holder: ClientHolder, doc_number: str) -> Opt
     return None
 
 
+def parse_ship_addr(raw: str):
+    """Return (supplied ship-to fields or None, error dict or None)."""
+    if not raw:
+        return None, None
+
+    def invalid(message):
+        return None, {"success": False, "error": "INVALID_JSON", "message": message}
+
+    try:
+        ship_addr = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return invalid(f"Invalid ship_addr JSON: {str(e)}")
+    if not isinstance(ship_addr, dict):
+        return invalid("ship_addr must be a JSON object")
+    unknown = sorted(set(ship_addr) - set(SHIP_ADDR_FIELDS))
+    if unknown:
+        return invalid(f"Unknown ship_addr keys: {', '.join(unknown)}. "
+                       f"Allowed: {', '.join(SHIP_ADDR_FIELDS)}")
+    supplied = {k: v for k, v in ship_addr.items() if v not in (None, '')}
+    for key, value in supplied.items():
+        if not isinstance(value, str):
+            return invalid(f"ship_addr {key} must be a string")
+    return supplied or None, None
+
+
 def parse_arguments():
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
@@ -156,6 +201,11 @@ def parse_arguments():
                         help='QBO Term ID (Invoice.SalesTermRef). e.g., 6=Due on receipt, 8=Net 30')
     parser.add_argument('--customer_memo', default='',
                         help='Customer-facing memo (Invoice.CustomerMemo) — prints on the invoice. e.g., "PO #1786SSF"')
+    parser.add_argument('--ship_addr', default='',
+                        help='JSON object for the ship-to address on this invoice (Invoice.ShipAddr). '
+                             'Without it the invoice uses the customer\'s default. '
+                             'Keys: line1, line2, line3, city, state, zip, country. '
+                             'Only the keys you give are set.')
     return parser.parse_args()
 
 
@@ -180,6 +230,11 @@ def main():
                 "error": "EMPTY_LINE_ITEMS",
                 "message": "At least one line item is required"
             })
+            sys.exit(1)
+
+        ship_addr, ship_addr_error = parse_ship_addr(args.ship_addr)
+        if ship_addr_error:
+            output_json(ship_addr_error)
             sys.exit(1)
 
         # Create client
@@ -264,6 +319,17 @@ def main():
             memo = CustomerMemo()
             memo.value = args.customer_memo
             invoice.CustomerMemo = memo
+
+        if ship_addr:
+            from quickbooks.objects.base import Address
+            addr = Address()
+            # The SDK leaves unset fields as empty strings and posts them.
+            # None keeps them out of the request.
+            for field in list(vars(addr)):
+                setattr(addr, field, None)
+            for key, value in ship_addr.items():
+                setattr(addr, SHIP_ADDR_FIELDS[key], value)
+            invoice.ShipAddr = addr
 
         # Set custom fields
         if args.custom_fields:
