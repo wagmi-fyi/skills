@@ -18,10 +18,9 @@ Design properties (see reference/session-bus.md + reference/substrate.md):
     every message records the account the send ran as, beside the `from` handle
     the sender typed.
 
-Invoke:  <install-dir>/bus <cmd> ... on a machine that installs this file once
-         for everybody on it. The orchestrate skill reaches the same program
-         through a symlink at ~/.claude/skills/orchestrate/scripts/bus. Neither
-         is on PATH.
+Invoke:  <skill-dir>/scripts/bus <cmd> ... from the orchestrate skill, or
+         <install-dir>/bus <cmd> ... on a machine that installs this file once
+         for everybody on it. Neither is on PATH.
 """
 import sys, os, json, uuid, argparse, time, re, pwd
 from datetime import datetime
