@@ -80,8 +80,9 @@ def is_stamp_only(repo, sha, skill):
     if set(files) - {f"{skill}/SKILL.md"}:
         return False
     changed = [l for l in diff.split("\n")
-               if l[:1] in "+-" and not l.startswith(("+++", "---"))]
-    return bool(changed) and all(re.match(r'^[+-]  version: ', l) for l in changed)
+               if l[:1] in ("+", "-") and not l.startswith(("+++", "---"))]
+    return (any(re.match(r'^[+-]  version: ', l) for l in changed)
+            and all(re.match(r'^[+-](  version: |metadata:$)', l) for l in changed))
 
 
 def expected_stamp(repo, skill):
