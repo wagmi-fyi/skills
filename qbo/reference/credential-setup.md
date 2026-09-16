@@ -220,7 +220,9 @@ The variable names this skill reads are in
 manager and reach the skill through the environment, and no file exists. If a `.env`
 is used instead, the human confirms it is covered by `.gitignore` at any depth, and it
 goes at one of the paths in `SKILL.md` under "Where the skill looks", never inside the
-skill directory.
+skill directory. On a CommonClaw machine that runs a token service, the client ID, the
+client secret and the refresh token go into the service's vault item instead, as
+`SKILL.md` says under "Seeding the token service".
 
 ## Token lifetimes
 

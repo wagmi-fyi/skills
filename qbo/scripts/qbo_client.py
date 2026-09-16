@@ -52,6 +52,23 @@ def _env_candidates() -> list:
     return [c for c in candidates if c]
 
 
+def _first_env_file() -> Optional[str]:
+    """The first existing path from _env_candidates(), or None."""
+    return next((c for c in _env_candidates() if os.path.exists(c)), None)
+
+
+def _not_configured(message: str, required: list) -> None:
+    """Print the not-configured failure on stdout and exit."""
+    print(json.dumps({
+        "success": False,
+        "error": "QBO_NOT_CONFIGURED",
+        "message": message,
+        "required_vars": required,
+        "tried_paths": _env_candidates(),
+    }))
+    sys.exit(1)
+
+
 def _find_env_file() -> Optional[str]:
     """Return the .env holding the credentials, or None if none is needed.
 
@@ -66,33 +83,102 @@ def _find_env_file() -> Optional[str]:
     if all(os.environ.get(var) for var in REQUIRED_CREDENTIALS):
         return None
 
-    candidates = _env_candidates()
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            return candidate
+    found = _first_env_file()
+    if found:
+        return found
 
-    print(json.dumps({
-        "success": False,
-        "error": "QBO_NOT_CONFIGURED",
-        "message": (
-            "QBO credentials not found. Either set the required variables in "
-            "the environment, or point QBO_ENV_PATH at a .env file, or create "
-            "one of the paths in tried_paths. scripts/.env.example is the "
-            "template."
-        ),
-        "required_vars": list(REQUIRED_CREDENTIALS),
-        "tried_paths": candidates,
-    }))
-    sys.exit(1)
+    _not_configured(
+        "QBO credentials not found. Either set the required variables in "
+        "the environment, or point QBO_ENV_PATH at a .env file, or create "
+        "one of the paths in tried_paths. scripts/.env.example is the "
+        "template.",
+        list(REQUIRED_CREDENTIALS),
+    )
 
 
-# Resolve credentials. The environment is authoritative; a .env only fills gaps.
-_env_file = _find_env_file()
-if _env_file:
-    load_dotenv(_env_file)
-    print(f"QBO: loaded credentials from {_env_file}", file=sys.stderr)
-else:
+# THE TOKEN SERVICE. A claw can run one process that holds each rotating
+# credential and refreshes it for every caller. Where it runs, this module asks
+# it for the current access token and never holds a refresh token or a client
+# secret. The client library is the claw's own, imported from where the claw
+# installs it. This skill carries no copy.
+TOKEN_SERVICE_LIB = '/opt/commonclaw/lib/python'
+TOKEN_SERVICE_PROVIDER = 'intuit'
+TOKEN_SETTINGS = ('QBO_REALM_ID', 'QBO_ENVIRONMENT')
+TOKEN_VALUES = ('QBO_CLIENT_SECRET', 'QBO_ACCESS_TOKEN', 'QBO_REFRESH_TOKEN')
+
+
+def _token_service():
+    """The token service client when this machine runs the service, else None.
+
+    The machine runs it when the `token` command is on PATH, the library
+    imports, and the socket answers. Any one of those missing means there is
+    no service here, and the .env path runs.
+    """
+    import shutil
+    if not shutil.which('token'):
+        return None
+    lib = os.environ.get('COMMONCLAW_CONN_LIB', TOKEN_SERVICE_LIB)
+    if lib not in sys.path:
+        sys.path.append(lib)
+    try:
+        from commonclaw_connection.tokens_client import TokensClient, TokensError
+    except ImportError:
+        return None
+    service = TokensClient(timeout=30)
+    try:
+        # Any answer, a refusal included, proves the service is here.
+        service.call({"verb": "status", "row": TOKEN_SERVICE_PROVIDER})
+    except TokensError:
+        return None
+    return service
+
+
+def _token_settings() -> Dict[str, str]:
+    """The realm and environment for the service path.
+
+    They are identifiers, so they may come from the environment or from the
+    first .env candidate. Only these two keys are taken from that file.
+    """
+    settings = {k: os.environ.get(k, '') for k in TOKEN_SETTINGS}
+    found = _first_env_file()
+    if found and not all(settings.values()):
+        from dotenv import dotenv_values
+        values = dotenv_values(found)
+        for k in TOKEN_SETTINGS:
+            settings[k] = settings[k] or (values.get(k) or '')
+        held = [k for k in TOKEN_VALUES if values.get(k)]
+        if held:
+            print(f"QBO: {found} still holds {', '.join(held)}. The token service "
+                  f"path does not read them, and they can come out of the file.",
+                  file=sys.stderr)
+    if not settings['QBO_REALM_ID']:
+        _not_configured(
+            "This machine runs a token service, so QBO needs only the realm id. "
+            "Set QBO_REALM_ID in the environment, or in one of the paths in "
+            "tried_paths.",
+            ['QBO_REALM_ID'],
+        )
+    return settings
+
+
+# Resolve credentials. The environment wins, then the token service, then a .env.
+_env_file = None
+_service = None
+_token_row = None
+_service_settings: Dict[str, str] = {}
+if all(os.environ.get(var) for var in REQUIRED_CREDENTIALS):
     print("QBO: using credentials from the environment; no .env read", file=sys.stderr)
+else:
+    _service = _token_service()
+    if _service is not None:
+        _service_settings = _token_settings()
+        _token_row = f"{TOKEN_SERVICE_PROVIDER}/{_service_settings['QBO_REALM_ID']}"
+        print(f"QBO: taking tokens from the token service, row {_token_row}; "
+              f"no token is read from or written to a file", file=sys.stderr)
+    else:
+        _env_file = _find_env_file()
+        load_dotenv(_env_file)
+        print(f"QBO: loaded credentials from {_env_file}", file=sys.stderr)
 
 # QBO SDK imports
 try:
@@ -165,6 +251,14 @@ def validate_env_vars() -> Dict[str, str]:
     Raises:
         ValueError: If required vars are missing.
     """
+    if _service is not None:
+        # The token service holds the tokens and the client secret.
+        return {
+            'realm_id': _service_settings['QBO_REALM_ID'],
+            'environment': _service_settings['QBO_ENVIRONMENT'] or 'production',
+            'token_row': _token_row,
+        }
+
     required_vars = [
         'QBO_CLIENT_ID',
         'QBO_CLIENT_SECRET',
@@ -198,6 +292,9 @@ def save_refreshed_tokens(access_token: str, refresh_token: str) -> bool:
     Returns:
         True if tokens were saved successfully, False otherwise.
     """
+    if _service is not None:
+        return False
+
     if not _env_file:
         print(
             "WARNING: credentials came from the environment, so there is no "
@@ -281,6 +378,9 @@ def create_client(credentials: Optional[Dict[str, str]] = None) -> Tuple[Optiona
                 "message": str(e)
             }
 
+    if credentials.get('token_row'):
+        return _service_client(credentials, lambda: _service.get(credentials['token_row']))
+
     try:
         auth_client = AuthClient(
             client_id=credentials['client_id'],
@@ -300,6 +400,68 @@ def create_client(credentials: Optional[Dict[str, str]] = None) -> Tuple[Optiona
         # Store credentials on client for refresh_client() to use
         client._qbo_credentials = credentials
 
+        return client, None
+
+    except Exception as e:
+        return None, {
+            "success": False,
+            "error": "CLIENT_ERROR",
+            "message": f"Failed to create QBO client: {str(e)}"
+        }
+
+
+def _service_client(credentials: Dict[str, str], ask) -> Tuple[Optional[object], Optional[Dict]]:
+    """A client built on the access token the token service answers.
+
+    `ask` is the call to the service: `get` for a new client, `rejected` after
+    a 401. The client carries no refresh token, so the SDK cannot refresh on
+    its own. Only the token's fingerprint is kept for the next report.
+    """
+    from commonclaw_connection.tokens_client import TokensError, fingerprint
+    row = credentials['token_row']
+    try:
+        cred = ask()
+    except TokensError as e:
+        state = ''
+        try:
+            rows = _service.status(row=row).get('rows') or []
+            state = rows[0].get('state', '') if rows else ''
+        except TokensError:
+            pass
+        if state == 'needs-person':
+            return None, {
+                "success": False,
+                "error": "REFRESH_TOKEN_EXPIRED",
+                "message": (
+                    f"Intuit refused the refresh token the token service holds for {row}. "
+                    f"A QuickBooks company admin re-authorizes, the new refresh token goes "
+                    f"into the row's vault item, and a claw-admin runs the seed door with "
+                    f"--reseed. token status {row} names the item and the door. "
+                    f"See reference/credential-setup.md."
+                ),
+            }
+        return None, {
+            "success": False,
+            "error": "TOKEN_SERVICE_ERROR",
+            "message": f"The token service did not answer a token for {row}: {e}",
+        }
+
+    try:
+        auth_client = AuthClient(
+            client_id=(cred.get('client') or {}).get('client_id', ''),
+            client_secret='',
+            access_token=cred['access_token'],
+            environment=credentials['environment'],
+            redirect_uri='https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl'
+        )
+        client = QuickBooks(
+            auth_client=auth_client,
+            refresh_token=None,
+            company_id=credentials['realm_id']
+        )
+        client._qbo_credentials = credentials
+        client._qbo_token_fp = fingerprint(cred['access_token'])
+        cred = None
         return client, None
 
     except Exception as e:
@@ -330,6 +492,11 @@ def refresh_client(client) -> Tuple[Optional[object], Optional[Dict]]:
         }
 
     credentials = client._qbo_credentials
+
+    if credentials.get('token_row'):
+        told = getattr(client, '_qbo_token_fp', '')
+        return _service_client(
+            credentials, lambda: _service.rejected(credentials['token_row'], told))
 
     try:
         auth_client = AuthClient(
@@ -478,7 +645,12 @@ MAX_RETRIES = 3
 
 
 def save_tokens_if_available(client, env_path: Optional[str] = None) -> None:
-    """Save refreshed tokens from client's auth_client if available."""
+    """Save refreshed tokens from client's auth_client if available.
+
+    On the token service path there is nothing to save, and nothing is written.
+    """
+    if _service is not None:
+        return
     if hasattr(client, 'auth_client') and client.auth_client:
         auth = client.auth_client
         if hasattr(auth, 'access_token') and hasattr(auth, 'refresh_token'):
@@ -490,6 +662,8 @@ def save_tokens_if_available(client, env_path: Optional[str] = None) -> None:
 
 def _save_tokens_to_path(access_token: str, refresh_token: str, env_path: str) -> None:
     """Save tokens to a specific .env path (for callers that resolve their own path)."""
+    if _service is not None:
+        return
     if not os.path.exists(env_path) or not access_token or not refresh_token:
         return
     try:

@@ -10,7 +10,7 @@ The bookkeeping skill uses this one for its QuickBooks work. It also stands alon
 |---|---|
 | **Runtime** | Python 3.12 or newer. |
 | **Packages** | Three, pinned in `requirements.txt`. The QuickBooks SDK, Intuit's OAuth client, and a `.env` loader. |
-| **Credentials** | A QuickBooks Online OAuth app: client id, client secret, access token, refresh token, and the realm id of the company. |
+| **Credentials** | A QuickBooks Online OAuth app: client id, client secret, access token, refresh token, and the realm id of the company. On a CommonClaw machine that runs a token service, the service holds them and the skill needs the realm id alone. |
 | **Network** | Intuit's API, and nothing else. |
 
 Getting those five values means registering an app on the Intuit Developer Portal, passing a short compliance questionnaire, and running one consent flow as an admin of the QuickBooks company. `reference/credential-setup.md` walks through all of it, and your agent can drive it with you. Budget about 15 minutes.
@@ -56,7 +56,7 @@ don't have.
 
 ## Manual install
 
-Clone the repository, copy the `qbo` folder into whichever skills directory your agent reads, and install the pins from `requirements.txt` into the environment you run scripts with. For credentials, either export the five `QBO_` variables from your secrets manager, or copy `scripts/.env.example` to one of the paths listed in `SKILL.md` under "Where the skill looks" and fill it in. Never inside the skill directory, never in git. `reference/credential-setup.md` covers getting the values in the first place.
+Clone the repository, copy the `qbo` folder into whichever skills directory your agent reads, and install the pins from `requirements.txt` into the environment you run scripts with. For credentials, either export the five `QBO_` variables from your secrets manager, or copy `scripts/.env.example` to one of the paths listed in `SKILL.md` under "Where the skill looks" and fill it in. Never inside the skill directory, never in git. `reference/credential-setup.md` covers getting the values in the first place. On a CommonClaw machine that runs a token service, seed the service instead. `SKILL.md` under "Seeding the token service" says how.
 
 ## First run
 
@@ -64,7 +64,7 @@ Ask for something you can check against the QuickBooks web UI:
 
 > Use qbo. List my bank accounts.
 
-If the credentials are wrong the skill says so and names both the variables it wanted and every path it looked in. A `REFRESH_TOKEN_EXPIRED` error means re-running the consent step, which needs a company admin.
+If the credentials are wrong the skill says so and names both the variables it wanted and every path it looked in. A `REFRESH_TOKEN_EXPIRED` error means re-running the consent step, which needs a company admin. The new refresh token goes into the `.env`, or into the token service's vault item followed by the seed door with `--reseed`.
 
 ## Writes are real
 

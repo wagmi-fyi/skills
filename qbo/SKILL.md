@@ -75,26 +75,34 @@ Nobody has these on a first install. [`reference/credential-setup.md`](reference
 
 **The environment wins.** When `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_ACCESS_TOKEN`, `QBO_REFRESH_TOKEN` and `QBO_REALM_ID` are already set, no file is read and none has to exist. A secrets manager that injects at invocation lands here, and it is the only arrangement with no plaintext credential sitting on disk. Prefer it.
 
+**Then the token service, on a CommonClaw machine that runs one.** The machine runs one when the `token` command is on PATH and the service answers. The skill asks it for the row `intuit/{realm id}` and uses the access token it hands back. On a 401 the skill reports the refused token by its fingerprint and takes the token the service answers, once. The client secret and the refresh token stay inside the service, and the skill writes no token to disk. From the files below it reads `QBO_REALM_ID` and `QBO_ENVIRONMENT` alone, when the environment does not set them. The client is the machine's own library in `/opt/commonclaw/lib/python`, and the skill carries no copy of it.
+
 Otherwise the skill looks for a `.env`, first existing file winning:
 
-1. **`QBO_ENV_PATH`** — an explicit path. The override for any layout the rules below miss.
+1. **`QBO_ENV_PATH`**, an explicit path. The override for any layout the rules below miss.
 2. **`BOOKKEEPING_CONFIG_PATH`** → `{local_dir}/adapters/.env`. When bookkeeping is in use, both read and write the same file, so a refreshed token cannot drift between them.
-3. **`{cwd}/.claude/skills/qbo/.env`** — per project, resolved against the directory the command runs in. That dependence is what lets one project hold its own company file, and it means the same command run from a subdirectory resolves somewhere else.
-4. **`~/.claude/skills/qbo/.env`** — a global install.
+3. **`{cwd}/.claude/skills/qbo/.env`**, per project, resolved against the directory the command runs in. That dependence is what lets one project hold its own company file, and it means the same command run from a subdirectory resolves somewhere else.
+4. **`~/.claude/skills/qbo/.env`**, a global install.
 
 No candidate is inside this skill's directory, and none should be. A credential does not belong somewhere that gets copied, synced, or committed. [`scripts/.env.example`](scripts/.env.example) is the template and names every variable.
 
-When nothing resolves, the error names the variables it wanted and every path it tried.
+When nothing resolves, the error names the variables it wanted and every path it tried. The first stderr line of every run names the path the skill took.
+
+### Seeding the token service
+
+A person seeds the row once, on the machine. `token add intuit/{realm id} --metadata https://developer.api.intuit.com/.well-known/openid_configuration --path paste` writes it and prints the steps. A sandbox company takes `openid_sandbox_configuration` in that URL. The steps name a vault item. The person gives it the fields `client_id`, `client_secret` and `refresh_token`, and pastes each value from Intuit's own pages, with the refresh token from the Playground step in [`reference/credential-setup.md`](reference/credential-setup.md). Nobody types a value into a conversation or a shell. A claw-admin then runs the seed door the steps name, from their own login, and `token check intuit/{realm id}` proves it. The browser paths pass no client secret, and Intuit's token endpoint requires one, so Intuit takes the paste path. A laptop keeps the `.env` path.
 
 ### Tokens
 
-Refresh is lazy. A token is renewed only when a call returns 401, and the new pair is written back to whichever `.env` was loaded at startup. That path is logged to stderr, so the write target is never a guess.
+On the token service path the service renews the token and keeps the new pair. The skill writes nothing.
+
+On the `.env` path, refresh is lazy. A token is renewed only when a call returns 401, and the new pair is written back to whichever `.env` was loaded at startup. That path is logged to stderr, so the write target is never a guess.
 
 When credentials came from the environment there is no file to write to. The skill says so on stderr and keeps working for the rest of the run. The refreshed pair has to be stored back wherever the environment gets its values, or the next run starts from the old one.
 
 A refresh token has a five-year maximum life and rotates on each refresh, so the new value has to be persisted every time. Intuit replaced the old use-it-every-100-days policy in November 2025, and for the accounting scope the first tokens start expiring in October 2028. [`reference/credential-setup.md`](reference/credential-setup.md) carries the dates and the source.
 
-`REFRESH_TOKEN_EXPIRED` means re-authorizing through the OAuth Playground, which needs a QuickBooks company admin. Nothing in the skill can recover it.
+`REFRESH_TOKEN_EXPIRED` means re-authorizing through the OAuth Playground, which needs a QuickBooks company admin. Nothing in the skill can recover it. On the `.env` path the new pair goes where the old one was. On the token service path, `token status` shows the row as `needs-person`. The new refresh token goes into the row's vault item, and a claw-admin runs the seed door with `--reseed`.
 
 ## Dependencies
 
@@ -115,4 +123,4 @@ isolation does not serve. Ruled 2026-08-16. One manifest, never both.
 - Bank feeds are not in the API. Raw feed transactions cannot be read through this skill.
 - Intuit rate-limits per realm. The scripts retry with backoff when they are throttled.
 - A query page tops out at 1000 rows. Larger sets need pagination.
-- Run queries one at a time. Two in parallel race on token refresh, and one of them loses its tokens.
+- On the `.env` path, run queries one at a time. Two in parallel race on token refresh, and one of them loses its tokens. The token service does one refresh for every caller, so its path has no such race.
