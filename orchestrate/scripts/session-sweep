@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""session-sweep -- end a session process that a newer process has replaced.
+
+THE DEFECT THIS CLOSES. The desktop app can reconnect a conversation under a
+new process and leave the old process running. The old one holds the
+transcript open, takes turns whenever something wakes it, and costs a few
+hundred megabytes for as long as the machine stays up. Ruled on 2026-09-08:
+end orphans.
+
+WHY IT SITS BESIDE THE RAIL. The wake rail delivers one sentence, and its law
+is proved by reading the rail alone. Ending a process is a different act with a
+different failure. So this program has its own file, its own unit and its own
+timer, and it shares one thing with the rail: `session-guard`, loaded from
+beside this file, which says which process of a session is newest.
+
+WHAT IT ENDS. An older process of a session is ended only when every one of
+these holds, each read at the moment it is ended:
+
+  1. A newer process carries the same session id, newer by the kernel's start
+     time, and no other process shares that newest start.
+  2. The newer process has run for at least the grace period.
+  3. The newer process holds its session socket open and listening.
+  4. The older process is an interactive session. A background agent is
+     retired through its harness, and the harness starts a killed one again
+     from its transcript, so this program leaves it running and names it.
+  5. The older process belongs to the account this runs as, and the kernel's
+     start time for its pid still equals the one its record carries.
+
+The signal is SIGTERM. It ended eleven such processes on 2026-09-08 and none
+came back. A process still running ten seconds later is logged, and the next
+pass sends the signal again.
+
+  session-sweep              one pass: end what qualifies, print JSON
+  session-sweep --dry-run    the same pass, ending nothing
+  session-sweep --check      resolve the settings, print them, end nothing
+
+THE GRACE PERIOD. SWEEP_GRACE_SECS, read from the environment as
+BUS_NUDGE_SWEEP_GRACE_SECS, then from the wake rail's machine conf, then the
+shipped default of 300 seconds. It is the one number to set. It is counted
+from the newer process's start, so a reconnect gets that long before its old
+process is ended.
+
+EXIT CODES. 0 the pass ran. 2 usage. 3 session-guard is missing beside this
+program, which is a wall.
+"""
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+import signal
+import sys
+import time
+
+CONF = os.environ.get("BUS_NUDGE_CONF", "/etc/bus-nudge.conf")
+DEFAULT_GRACE = 300
+GUARD_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "session-guard")
+SWEEPABLE_KIND = "interactive"
+
+
+def log(msg):
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
+
+
+def load_guard():
+    if not os.path.isfile(GUARD_PATH):
+        return None, "no session-guard at %s" % GUARD_PATH
+    sys.dont_write_bytecode = True
+    try:
+        loader = importlib.machinery.SourceFileLoader("session_guard", GUARD_PATH)
+        spec = importlib.util.spec_from_loader("session_guard", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+    except Exception as exc:  # a broken guard is reported, never half-used
+        return None, "session-guard at %s did not load: %s: %s" % (
+            GUARD_PATH, type(exc).__name__, exc)
+    return mod, ""
+
+
+def conf_value(key):
+    """One KEY="value" line from the rail's machine conf, or None."""
+    try:
+        with open(CONF, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == key:
+                    return v.strip().strip('"').strip("'")
+    except OSError:
+        return None
+    return None
+
+
+def grace():
+    """(seconds, where the value came from)."""
+    for raw, source in ((os.environ.get("BUS_NUDGE_SWEEP_GRACE_SECS"),
+                         "environment:BUS_NUDGE_SWEEP_GRACE_SECS"),
+                        (conf_value("SWEEP_GRACE_SECS"), CONF)):
+        if raw:
+            try:
+                return max(0, int(raw)), source
+            except ValueError:
+                log("SWEEP_GRACE_SECS from %s is '%s', which is not a number of seconds. "
+                    "The shipped default applies" % (source, raw))
+                break
+    return DEFAULT_GRACE, "shipped default"
+
+
+def socket_inodes(pid):
+    out = set()
+    fd_dir = "/proc/%d/fd" % pid
+    try:
+        names = os.listdir(fd_dir)
+    except OSError:
+        return out
+    for name in names:
+        try:
+            target = os.readlink(os.path.join(fd_dir, name))
+        except OSError:
+            continue
+        if target.startswith("socket:[") and target.endswith("]"):
+            out.add(target[8:-1])
+    return out
+
+
+def holds_listening_socket(pid, path):
+    """True when pid holds a listening stream socket bound at path.
+
+    Read from /proc/net/unix and the process's own descriptors. Nothing
+    connects to the socket, so the reading costs the session nothing.
+    """
+    if not path:
+        return False
+    held = socket_inodes(pid)
+    if not held:
+        return False
+    try:
+        with open("/proc/net/unix", "r", encoding="utf-8") as fh:
+            rows = fh.read().splitlines()[1:]
+    except OSError:
+        return False
+    for row in rows:
+        f = row.split()
+        # Num RefCount Protocol Flags Type St Inode Path. Flags 00010000 is a
+        # socket that accepts connections, which is the listening end.
+        if len(f) >= 8 and f[7] == path and f[3] == "00010000" and f[6] in held:
+            return True
+    return False
+
+
+def still_the_same(gen, r):
+    """The pid is running, is this account's, and is the process its record named."""
+    if gen.kernel_start(r["pid"]) != r["start"]:
+        return False
+    try:
+        return os.stat("/proc/%d" % r["pid"]).st_uid == os.geteuid()
+    except OSError:
+        return False
+
+
+def sweep(gen, grace_secs, dry_run):
+    ended, left = [], []
+    by_session = {}
+    for r in gen.live_records():
+        by_session.setdefault(r["session"], []).append(r)
+    for session, recs in sorted(by_session.items()):
+        if len(recs) < 2:
+            continue
+        gens = gen.generations(session, recs)
+        top = gen.newest(gens)
+        sid = session[:8]
+        if top is None:
+            for r in gens:
+                left.append({"pid": r["pid"], "session": sid,
+                             "reason": "two processes of this session started in one clock "
+                                       "tick, so neither is newer"})
+            continue
+        age = gen.age_secs(top["start"])
+        for r in gens:
+            if r["pid"] == top["pid"]:
+                continue
+            item = {"pid": r["pid"], "session": sid, "started": gen.start_utc(r["start"]),
+                    "newer_pid": top["pid"], "newer_started": gen.start_utc(top["start"])}
+            if r["kind"] != SWEEPABLE_KIND:
+                item["reason"] = ("its record says kind '%s'. Only an interactive session is "
+                                  "ended here; a background agent is retired through its harness"
+                                  % r["kind"])
+                left.append(item)
+                continue
+            if age is None or age < grace_secs:
+                item["reason"] = ("the newer process has run %s of the %ds grace period"
+                                  % ("an unknown time" if age is None else "%ds" % int(age),
+                                     grace_secs))
+                left.append(item)
+                continue
+            if not holds_listening_socket(top["pid"], top["socket"]):
+                item["reason"] = ("the newer process holds no listening socket at %s, so "
+                                  "nothing says it is the one being used" % (top["socket"] or "?"))
+                left.append(item)
+                continue
+            if not still_the_same(gen, r) or not still_the_same(gen, top):
+                item["reason"] = "one of the two processes changed while this pass read it"
+                left.append(item)
+                continue
+            if dry_run:
+                item["reason"] = "would end it with SIGTERM"
+                left.append(item)
+                continue
+            try:
+                os.kill(r["pid"], signal.SIGTERM)
+            except OSError as exc:
+                item["reason"] = "SIGTERM was refused: %s" % exc
+                left.append(item)
+                log("session %s: SIGTERM to pid %d was refused: %s" % (sid, r["pid"], exc))
+                continue
+            gone = False
+            for _ in range(100):
+                if gen.kernel_start(r["pid"]) != r["start"]:
+                    gone = True
+                    break
+                time.sleep(0.1)
+            item["gone"] = gone
+            ended.append(item)
+            log("session %s: ended pid %d started %s, superseded by pid %d started %s%s"
+                % (sid, r["pid"], item["started"], top["pid"], item["newer_started"],
+                   "" if gone else ". It was still running ten seconds later, and the next "
+                                   "pass sends SIGTERM again"))
+    return ended, left
+
+
+def main(argv):
+    args = list(argv)
+    if args and args[0] in ("-h", "--help"):
+        sys.stderr.write(__doc__)
+        return 2
+    mode = args[0] if args else ""
+    if len(args) > 1 or mode not in ("", "--dry-run", "--check"):
+        sys.stderr.write("usage: session-sweep [--dry-run | --check]\n")
+        return 2
+    gen, why = load_guard()
+    secs, source = grace()
+    if mode == "--check":
+        print(json.dumps({
+            "conf": CONF,
+            "grace_secs": secs,
+            "grace_source": source,
+            "session_guard": GUARD_PATH,
+            "session_guard_loaded": gen is not None,
+            "sessions_dir": gen.sessions_dir() if gen else None,
+            "blocking": [] if gen else [why],
+        }, indent=2))
+        return 0 if gen else 3
+    if gen is None:
+        log("refusing to run: %s. It says which process of a session is newest, and it "
+            "ships beside this program" % why)
+        return 3
+    ended, left = sweep(gen, secs, mode == "--dry-run")
+    result = {"dry_run": mode == "--dry-run", "grace_secs": secs,
+              "grace_source": source, "ended": ended, "left": left}
+    # UNDER THE JOURNAL, A QUIET PASS WRITES NOTHING. The timer runs a pass
+    # every five minutes per account, and a result block from each one is the
+    # journal volume the wake rail was fixed for. A pass that ended or left
+    # something writes one line. A hand run always prints the whole result.
+    if os.environ.get("JOURNAL_STREAM"):
+        if ended or left:
+            print(json.dumps(result))
+    else:
+        print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

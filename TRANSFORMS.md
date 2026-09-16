@@ -52,6 +52,25 @@ installer owns that rewrite. The rule the file states around the line holds
 either way: the default and the installed conf have to name one file, or a
 machine's own ruling reaches nothing.
 
+`orchestrate/scripts/session-sweep` reads the same conf, and its default line
+gets the same rewrite.
+
+**T7. The stamp.** The publish writes the source commit into each published
+`SKILL.md`, under `metadata` at the end of the front matter:
+
+    metadata:
+      version: "<short commit> <date>"
+
+The commit is the one the publish took the skill from. The date is that commit's
+date, in UTC. Source files have no version line. An installed copy compares its
+stamp with the one on `main`. A different stamp means a newer version exists.
+
+A skill whose source is this repository is stamped at the merge. The last commit
+on the pull request's branch sets the stamp to the commit before it and changes
+nothing else. The pull request is merged with a merge commit, because a squash
+would replace the commit the stamp names. The merge is refused when the stamp is
+missing, or names a commit other than the last one that changed the skill.
+
 **`.claude-plugin/` is publish-side only.** It is written here and never comes
 from a source tree.
 
@@ -85,3 +104,12 @@ a symlink into a deployment payload and its adapters were not in the skill tree
 at all, so a published copy carried a rail that refused every substrate by name.
 The fix was to move the source into the skill and to resolve the machine's own
 paths through the settings seam, not to strip the rail at publish time.
+
+## The paragraph and the script are the same in all four skills
+
+Every published skill opens its activation with the same paragraph and carries
+the same `scripts/check-current.py`, byte for byte. A change to either is made
+in all four sources at once. `tools/check-front-pages.py` refuses a second
+version of the paragraph or the script, a missing or malformed stamp, a wrong
+stamp on a skill that lives here, and a front page over 500 lines. The gate is
+trusted only when a fault planted in a scratch copy makes it fail.

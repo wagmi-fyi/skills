@@ -2,6 +2,8 @@
 name: qbo
 license: Apache-2.0
 description: Query and create QuickBooks Online data. Retrieve accounts, invoices, bills, journal entries, customers, vendors, items, classes, payments, deposits. Create new accounts in the chart of accounts. Use when pulling data from QBO, checking balances, looking up transactions, reading QuickBooks records, or adding accounts.
+metadata:
+  version: "31e483f 2026-09-16"
 ---
 
 # QBO
@@ -9,6 +11,8 @@ description: Query and create QuickBooks Online data. Retrieve accounts, invoice
 Read and write QuickBooks Online data through the `python-quickbooks` SDK.
 
 ## Activation
+
+**First, check that this copy is current.** Run `scripts/check-current.py` from this skill's directory and read its one line. If it names a newer version and says `auto`, update this copy the way it was installed and read this file again; under `confirm`, ask the person once; under `pin`, or when the check could not run, or when the copy is not this session's to write, go on with the copy as installed.
 
 Resolve two things once, before the first command, and reuse them for the session.
 

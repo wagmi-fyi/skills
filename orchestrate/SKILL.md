@@ -2,6 +2,8 @@
 name: orchestrate
 license: Apache-2.0
 description: "Run a verifying, multi-session orchestration: bootstrap a delegated project (plan + workpaper), dispatch work to human-reachable sessions over a built-in message bus, spawn delegates on whatever substrate the machine runs, and re-verify every result. Use when coordinating several agent sessions on one machine, running an orchestrator plus delegated workers, delegating build/migration/research units while staying lean, or setting up the session-bus. Pauses for design crossroads and human-only steps; runs autonomously otherwise."
+metadata:
+  version: "3016116 2026-09-16"
 ---
 
 # Orchestrate
@@ -23,6 +25,8 @@ A rule that depends on being read is not enforced, and a session's report of wha
 The operations and references below say **what** a run does. How a session is started, addressed, watched, woken and retired differs by host, so the core never names a mechanism: it names the act and points at `reference/substrate.md`, which routes to one runbook under `reference/substrates/`. **Resolve the substrate at activation and record it in the workpaper** before the first spawn.
 
 ## Activation
+
+**First, check that this copy is current.** Run `scripts/check-current.py` from this skill's directory and read its one line. If it names a newer version and says `auto`, update this copy the way it was installed and read this file again; under `confirm`, ask the person once; under `pin`, or when the check could not run, or when the copy is not this session's to write, go on with the copy as installed.
 
 When invoked:
 1. **Orient.** Which operation? *install* (stand up the substrate), *launch* (file a new project where the reader's convention puts it), *bootstrap* (decompose a project into an orchestration), *run* (drive an existing one), *checkpoint* (**pin standing postures before the human compacts**), *condense* (**archive workpaper history verbatim so the live file stays resume-sized** — checkpoint runs this check itself), *resume* (**re-ground after a compaction / cold re-entry**, then run), *recover* (**after a restart took every session down — relaunch, each relaunched session then resuming**), or *delegate* (you are a worker the human/orchestrator launched).
@@ -87,8 +91,10 @@ Substrate-independent:
 - `spawn <handle> [instruction]` — start a delegate on the configured substrate; JSON on stdout. It refuses, naming the reason, when that substrate's mechanism is absent here.
 - `spawn --check` — the activation preflight: resolves every setting and its origin, detects which substrates this host can run, proves the selected one is among them. Spawns nothing.
 - `bus-nudge --check|--once|--watch|--law` — the standing wake rail. It watches the buses on the machine from outside every session and tells a live session it has unread mail, in one fixed sentence and nothing else. Its core is substrate-independent; delivery is an adapter under `scripts/bus-nudge-adapters/`, one per substrate. `--law` proves the sentence carries no other interpolation, and the program refuses to run when that check fails.
+- `session-guard [--pid <pid>]`: prints `live` or `superseded` for the session it runs inside, and exits 0 or 1. Superseded means a newer process carries the same session id. `resume` and every beat of `run` call it first. It reads the harness's own session records, and where there are none it answers `live`.
 
 Substrate-specific, and **each one reaches nobody on a substrate its runbook doesn't claim it for**:
+- `session-sweep --check|--dry-run`: ends an older process of a session once a newer one has run for a grace period and holds its socket. It runs beside `bus-nudge` as a machine service under its own timer, outside every session.
 - `desktop-wake <handle>` — emit one line per new bus message for a harness's background-watch primitive; `--check` first, and again later to prove the watcher is still up.
 - `notify <title> <msg>` — desktop alert plus terminal bell, for a machine the human is sitting at.
 - `present <file.html>` — open a decision brief in a local browser.

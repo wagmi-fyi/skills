@@ -17,6 +17,8 @@ Confirm the bus is live (`bus handles`); if not, run `install`. **Survey the sha
 **Stand a heartbeat before an unattended stretch.** Manual is not a wake when nobody is at the board. An unattended run with no standing wake path is idle-with-backlog by construction, and the backlog is invisible from both ends, because a finished delegate and a parked one are equally silent. Every remaining move serializes through you, so a wake that never arrives costs the whole stretch rather than one report's latency. Arm the recurring path your runbook gives before the human walks away, prove it fires once, and record it beside the wake you declared.
 
 ## The beat (every turn, before anything else)
+**First, the guard.** Run `scripts/session-guard` before the board. It prints `live` or `superseded`. On superseded, a newer process carries this session and runs the beat: say so once and stop. An old process still takes a turn whenever something wakes it, and this step is what keeps it from acting on one.
+
 **Re-derive the board. Never report from memory of what you spawned.** A delegate that finished and a delegate parked on a question can be indistinguishable, and on some substrates neither one makes a sound. So each beat, in this order:
 
 1. **Read the board the way your runbook says to read it** (`substrate.md` → `substrates/<name>.md`). Classify every in-flight unit: working, blocked, finished, gone. **Handle blocked first** — it is spending nothing and the run is stopped on it.

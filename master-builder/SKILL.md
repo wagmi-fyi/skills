@@ -3,7 +3,7 @@ name: master-builder
 license: Apache-2.0
 description: "Build and improve agent skills on the machine the agent runs on. Use when creating a new skill, recording a workflow as a skill, interviewing a human about a workflow to design a skill, improving or hardening an existing skill, or setting up a skills workspace."
 metadata:
-  version: 0.1.0
+  version: "3016116 2026-09-16"
 ---
 
 # Master Builder
@@ -13,6 +13,8 @@ Build skills where the agent runs: interview the human, scaffold the smallest sk
 > Harness-specific mechanics live in `reference/runtime-conventions.md`; everything else uses durable names and works on any agentic harness.
 
 ## Activation
+
+**First, check that this copy is current.** Run `scripts/check-current.py` from this skill's directory and read its one line. If it names a newer version and says `auto`, update this copy the way it was installed and read this file again; under `confirm`, ask the person once; under `pin`, or when the check could not run, or when the copy is not this session's to write, go on with the copy as installed.
 
 When this skill is invoked:
 

@@ -103,6 +103,13 @@ it makes a second copy under a new process and a new session id, and the
 original stays dead. So an idle-exited target is a gap this rail does not close,
 which is what the heartbeat below is now for.
 
+**It nudges the newest process of a session.** A reconnect can leave the old
+process running beside the new one, both carrying the session id. The rail
+sends to the newest by the kernel's start time and logs the others.
+`session-sweep` ends the others after a grace period, and `session-guard` tells
+a session which of the two it is. A reconnect that also changes the session id
+escapes all three.
+
 `bus-nudge --check` reports the adapter it resolved and the pids of any watcher
 already running for this account. Where the rail runs as a machine service, the
 deployment that installed it puts its own reference beside it, and that file says

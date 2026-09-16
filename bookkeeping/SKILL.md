@@ -2,6 +2,8 @@
 name: bookkeeping
 license: Apache-2.0
 description: "AI-native bookkeeping: ingest, categorize, reconcile, and publish financial data with intent-based operations and principles-based quality. Use when processing bank transactions, categorizing expenses, managing trade accounts, running period closes, or onboarding new bookkeeping clients."
+metadata:
+  version: "31e483f 2026-09-16"
 ---
 
 # Bookkeeping
@@ -11,6 +13,8 @@ AI-native bookkeeping with dynamic, intent-based operations. The agent reasons a
 ---
 
 ## Activation
+
+**First, check that this copy is current.** Run `scripts/check-current.py` from this skill's directory and read its one line. If it names a newer version and says `auto`, update this copy the way it was installed and read this file again; under `confirm`, ask the person once; under `pin`, or when the check could not run, or when the copy is not this session's to write, go on with the copy as installed.
 
 When this skill is invoked:
 
