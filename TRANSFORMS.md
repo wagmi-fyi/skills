@@ -52,28 +52,21 @@ installer owns that rewrite. The rule the file states around the line holds
 either way: the default and the installed conf have to name one file, or a
 machine's own ruling reaches nothing.
 
-**T7. The stamp.** The publish writes the source revision into each published
-`SKILL.md`, as `version` under `metadata`, at the end of the front matter:
+**T7. The stamp.** The publish writes the source commit into each published
+`SKILL.md`, under `metadata` at the end of the front matter:
 
     metadata:
       version: "<short commit> <date>"
 
-The commit is the source revision the publish took the skill from, the one the
-pull request body records. The date is that commit's committer date in UTC,
-`YYYY-MM-DD`. A source file that already has a `metadata` block keeps it, and
-the line goes at its end. The source files carry no version line, and nobody
-bumps a number by hand. An installed copy compares its stamp with the one on
-`main`, so a stamp that differs is a newer version. The unit that publishes
-applies T7 with the other transforms.
+The commit is the one the publish took the skill from. The date is that commit's
+date, in UTC. Source files have no version line. An installed copy compares its
+stamp with the one on `main`. A different stamp means a newer version exists.
 
-`bookkeeping` and `qbo` are sourced here, so their stamp is written at the
-merge. The maintainer's merge unit commits it on the pull request's branch as
-the branch's last commit, naming the commit before it: the last one that
-changed the skill's tree. That commit changes the stamp line and nothing else.
-The pull request merges with a merge commit, because a squash replaces the
-commit the stamp names. The merge unit runs `tools/check-front-pages.py` on the
-branch head before the merge and on `main` after it, and a pull request whose
-stamp is missing or stale is refused.
+A skill whose source is this repository is stamped at the merge. The last commit
+on the pull request's branch sets the stamp to the commit before it and changes
+nothing else. The pull request is merged with a merge commit, because a squash
+would replace the commit the stamp names. The merge is refused when the stamp is
+missing, or names a commit other than the last one that changed the skill.
 
 **`.claude-plugin/` is publish-side only.** It is written here and never comes
 from a source tree.
@@ -109,20 +102,11 @@ at all, so a published copy carried a rail that refused every substrate by name.
 The fix was to move the source into the skill and to resolve the machine's own
 paths through the settings seam, not to strip the rail at publish time.
 
-## The update check is one paragraph
+## The paragraph and the script are the same in all four skills
 
-Every published skill opens its activation with the same paragraph, byte for
-byte. The paragraph runs `scripts/check-current.py` and acts on the one line it
-prints. The script reads the stamp, checks `main` once a day, and reads the
-person's `UPDATE` word. A skill stands alone once installed, so each skill
-carries its own copy of both. `tools/check-front-pages.py` is the gate. It
-reads the front pages, refuses a second variant of the paragraph, refuses a
-missing or malformed stamp, checks the stamp of a skill sourced here against
-its history, and holds each front page under the format's 500-line ceiling. It
-also refuses a script that differs from the others by one byte, and runs each
-one with `--help`. A change to the paragraph or the script is made in all four
-sources in one piece of work, and the gate runs over the sources too, with
-`--unstamped` for each source tree.
-
-Its pass counts beside a control: one changed byte in a scratch copy of one
-paragraph has to make it fail.
+Every published skill opens its activation with the same paragraph and carries
+the same `scripts/check-current.py`, byte for byte. A change to either is made
+in all four sources at once. `tools/check-front-pages.py` refuses a second
+version of the paragraph or the script, a missing or malformed stamp, a wrong
+stamp on a skill that lives here, and a front page over 500 lines. The gate is
+trusted only when a fault planted in a scratch copy makes it fail.
