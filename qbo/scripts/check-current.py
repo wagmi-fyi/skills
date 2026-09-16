@@ -6,7 +6,7 @@ published from, and that commit's date. This script compares it with the
 stamp on the published page, at most once a day, and prints one line:
 
   current                       the stamps match
-  current, checked <time>       a check ran less than a day ago; no fetch
+  checked <time>                a check ran less than a day ago; no fetch
   newer <stamp> auto            a newer version is published; take it
   newer <stamp> confirm         a newer version is published; ask the person once
   newer <stamp> pin             a newer version is published; keep this copy
@@ -102,7 +102,7 @@ def check(skill, base, now):
     cache = skill / ".update-check"
     last = read_cache(cache)
     if last is not None and datetime.timedelta(0) <= now - last < DAY:
-        return f"current, checked {last.isoformat(timespec='seconds')}"
+        return f"checked {last.isoformat(timespec='seconds')}"
     try:
         seen = fetch_stamp(f"{base.rstrip('/')}/{name}/SKILL.md")
     except (OSError, ValueError) as e:
