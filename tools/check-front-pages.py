@@ -6,7 +6,9 @@ Checks, per TRANSFORMS.md (T7 and "The update check is one paragraph"):
   - every published front page carries a well-formed stamp;
   - a skill sourced in this repository carries the stamp of the last commit that
     changed its tree, the stamp commits themselves left out;
-  - every front page stays under the format's 500-line ceiling.
+  - every front page stays under the format's 500-line ceiling;
+  - every skill carries scripts/check-current.py, byte for byte the same,
+    executable, and answering --help with exit 0.
 
 Usage:
   uv run tools/check-front-pages.py [--repo DIR] [SKILL_DIR ...] [--unstamped DIR ...]
@@ -17,7 +19,9 @@ Prints JSON on stdout. Exit 0 is a pass, exit 1 a refusal.
 """
 import argparse
 import datetime
+import hashlib
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -26,6 +30,7 @@ import sys
 LEAD = "**First, check that this copy is current.**"
 STAMP = re.compile(r'^  version: "([0-9a-f]{7,40}) (\d{4}-\d{2}-\d{2})"$')
 MAX_LINES = 500
+SCRIPT = "scripts/check-current.py"
 
 
 def front_matter(text):
@@ -60,6 +65,20 @@ def paragraph_of(text):
         if line.startswith(LEAD):
             return line
     return None
+
+
+def check_script(d, scripts, problems):
+    script = d / SCRIPT
+    if not script.is_file():
+        problems.append(f"{SCRIPT} missing")
+        return
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    scripts.setdefault(digest, []).append(str(d))
+    if not os.access(script, os.X_OK):
+        problems.append(f"{SCRIPT} is not executable")
+    r = subprocess.run([str(script), "--help"], capture_output=True, text=True)
+    if r.returncode != 0 or "UPDATE" not in r.stdout:
+        problems.append(f"{SCRIPT} --help exits {r.returncode}")
 
 
 def git(repo, *args):
@@ -107,7 +126,7 @@ def main():
     skills = a.skills or [s.removeprefix("./") for s in
                           json.loads((repo / ".claude-plugin/plugin.json").read_text())["skills"]]
     home = sourced_here(repo)
-    results, paragraphs = [], {}
+    results, paragraphs, scripts = [], {}, {}
 
     pages = [(pathlib.Path(s) if pathlib.Path(s).is_absolute() else repo / s, True) for s in skills]
     pages += [(pathlib.Path(s).resolve(), False) for s in a.unstamped]
@@ -121,6 +140,7 @@ def main():
             r["problems"].append("update-check paragraph missing")
         else:
             paragraphs.setdefault(para, []).append(str(d))
+        check_script(d, scripts, r["problems"])
         try:
             fm = front_matter(text)
             st = stamp_of(fm)
@@ -142,8 +162,11 @@ def main():
     problems = sum(len(r["problems"]) for r in results)
     if len(paragraphs) > 1:
         problems += 1
+    if len(scripts) > 1:
+        problems += 1
     out = {"pass": problems == 0, "paragraph_variants": len(paragraphs),
-           "variants": list(paragraphs.values()), "pages": results}
+           "variants": list(paragraphs.values()), "script_variants": len(scripts),
+           "scripts": list(scripts.values()), "pages": results}
     json.dump(out, sys.stdout, indent=2)
     print()
     sys.exit(0 if out["pass"] else 1)

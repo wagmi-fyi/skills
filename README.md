@@ -72,7 +72,9 @@ Each skill checks for a newer version when it starts, at most once a day. Its
 `SKILL.md` carries a stamp under `metadata`: the commit it was published from,
 and the date. The publish writes it, and nobody bumps a number. The check reads
 the same file on this repository's `main` and compares the two stamps. That is
-one small HTTPS request, with no git needed.
+one small HTTPS request, with no git needed. The check is
+`scripts/check-current.py` in the skill's directory, and it prints one line
+that says what it found.
 
 What happens when the stamps differ is yours to choose. Put one word in a file
 named `UPDATE` inside the skill's directory:

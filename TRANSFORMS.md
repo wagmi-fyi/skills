@@ -112,14 +112,17 @@ paths through the settings seam, not to strip the rail at publish time.
 ## The update check is one paragraph
 
 Every published skill opens its activation with the same paragraph, byte for
-byte. It reads the stamp, checks `main` once a day, and acts on the person's
-`UPDATE` word. A skill stands alone once installed, so each front page carries
-its own copy. `tools/check-front-pages.py` is the gate. It reads the front
-pages, refuses a second variant of the paragraph, refuses a missing or
-malformed stamp, checks the stamp of a skill sourced here against its history,
-and holds each front page under the format's 500-line ceiling. A change to the
-paragraph is made in all four sources in one piece of work, and the gate runs
-over the sources too, with `--unstamped` for each source tree.
+byte. The paragraph runs `scripts/check-current.py` and acts on the one line it
+prints. The script reads the stamp, checks `main` once a day, and reads the
+person's `UPDATE` word. A skill stands alone once installed, so each skill
+carries its own copy of both. `tools/check-front-pages.py` is the gate. It
+reads the front pages, refuses a second variant of the paragraph, refuses a
+missing or malformed stamp, checks the stamp of a skill sourced here against
+its history, and holds each front page under the format's 500-line ceiling. It
+also refuses a script that differs from the others by one byte, and runs each
+one with `--help`. A change to the paragraph or the script is made in all four
+sources in one piece of work, and the gate runs over the sources too, with
+`--unstamped` for each source tree.
 
 Its pass counts beside a control: one changed byte in a scratch copy of one
 paragraph has to make it fail.
