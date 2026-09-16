@@ -2,6 +2,8 @@
 name: qbo
 license: Apache-2.0
 description: Query and create QuickBooks Online data. Retrieve accounts, invoices, bills, journal entries, customers, vendors, items, classes, payments, deposits. Create new accounts in the chart of accounts. Use when pulling data from QBO, checking balances, looking up transactions, reading QuickBooks records, or adding accounts.
+metadata:
+  version: "5403d9f 2026-09-16"
 ---
 
 # QBO
