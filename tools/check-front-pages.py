@@ -76,6 +76,7 @@ def check_script(d, scripts, problems):
     scripts.setdefault(digest, []).append(str(d))
     if not os.access(script, os.X_OK):
         problems.append(f"{SCRIPT} is not executable")
+        return
     r = subprocess.run([str(script), "--help"], capture_output=True, text=True)
     if r.returncode != 0 or "UPDATE" not in r.stdout:
         problems.append(f"{SCRIPT} --help exits {r.returncode}")
