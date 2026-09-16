@@ -97,13 +97,14 @@ def _find_env_file() -> Optional[str]:
 
 
 # THE TOKEN SERVICE. A claw can run one process that holds each rotating
-# credential and refreshes it for every caller. Where it runs, this module asks
-# it for the current access token and never holds a refresh token or a client
-# secret. The client library is the claw's own, imported from where the claw
-# installs it. This skill carries no copy.
+# credential and refreshes it for every caller. Where it runs and the settings
+# file holds no token, this module asks it for the current access token and
+# never holds a refresh token or a client secret. The client library is the
+# claw's own, imported from where the claw installs it. This skill carries no
+# copy.
 TOKEN_SERVICE_LIB = '/opt/commonclaw/lib/python'
 TOKEN_SERVICE_PROVIDER = 'intuit'
-TOKEN_SETTINGS = ('QBO_REALM_ID', 'QBO_ENVIRONMENT')
+TOKEN_SETTINGS = ('QBO_REALM_ID', 'QBO_ENVIRONMENT', 'QBO_TOKEN_ROW')
 TOKEN_VALUES = ('QBO_CLIENT_SECRET', 'QBO_ACCESS_TOKEN', 'QBO_REFRESH_TOKEN')
 
 
@@ -134,10 +135,11 @@ def _token_service():
 
 
 def _token_settings() -> Dict[str, str]:
-    """The realm and environment for the service path.
+    """The realm, the environment and the row name for the service path.
 
     They are identifiers, so they may come from the environment or from the
-    first .env candidate. Only these two keys are taken from that file.
+    first .env candidate. Only these keys are taken from that file. The row
+    name is the one given at seeding. Unset, it is intuit/<realm id>.
     """
     settings = {k: os.environ.get(k, '') for k in TOKEN_SETTINGS}
     found = _first_env_file()
@@ -146,11 +148,6 @@ def _token_settings() -> Dict[str, str]:
         values = dotenv_values(found)
         for k in TOKEN_SETTINGS:
             settings[k] = settings[k] or (values.get(k) or '')
-        held = [k for k in TOKEN_VALUES if values.get(k)]
-        if held:
-            print(f"QBO: {found} still holds {', '.join(held)}. The token service "
-                  f"path does not read them, and they can come out of the file.",
-                  file=sys.stderr)
     if not settings['QBO_REALM_ID']:
         _not_configured(
             "This machine runs a token service, so QBO needs only the realm id. "
@@ -161,7 +158,19 @@ def _token_settings() -> Dict[str, str]:
     return settings
 
 
-# Resolve credentials. The environment wins, then the token service, then a .env.
+def _holds_tokens(path: str) -> bool:
+    """Whether a settings file holds any token value."""
+    from dotenv import dotenv_values
+    values = dotenv_values(path)
+    return any(values.get(k) for k in TOKEN_VALUES)
+
+
+# Resolve credentials.
+# When the environment holds all five variables, the environment wins and no file is read.
+# When the first settings file holds a token value, that file is the credentials file and the token service is never asked.
+# When that file holds only identifiers, the token service path runs with them, asking for the row QBO_TOKEN_ROW names, or intuit/<realm id> when it is unset.
+# When there is no file, the token service path runs with the identifiers from the environment.
+# When no token service answers, the settings file is loaded, and a missing file stops the run.
 _env_file = None
 _service = None
 _token_row = None
@@ -169,10 +178,13 @@ _service_settings: Dict[str, str] = {}
 if all(os.environ.get(var) for var in REQUIRED_CREDENTIALS):
     print("QBO: using credentials from the environment; no .env read", file=sys.stderr)
 else:
-    _service = _token_service()
+    _first = _first_env_file()
+    if _first is None or not _holds_tokens(_first):
+        _service = _token_service()
     if _service is not None:
         _service_settings = _token_settings()
-        _token_row = f"{TOKEN_SERVICE_PROVIDER}/{_service_settings['QBO_REALM_ID']}"
+        _token_row = (_service_settings['QBO_TOKEN_ROW']
+                      or f"{TOKEN_SERVICE_PROVIDER}/{_service_settings['QBO_REALM_ID']}")
         print(f"QBO: taking tokens from the token service, row {_token_row}; "
               f"no token is read from or written to a file", file=sys.stderr)
     else:
