@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refuse a published tree whose front pages disagree about staying current.
 
-Checks, per TRANSFORMS.md (T7 and "The update check is one paragraph"):
+Checks, per PUBLISHING.md ("The stamp" and "The activation paragraph and the check script"):
   - every front page carries the update-check paragraph, byte for byte the same;
   - every published front page carries a well-formed stamp;
   - a skill sourced in this repository carries the stamp of the last commit that
@@ -88,10 +88,8 @@ def git(repo, *args):
 
 
 def sourced_here(repo):
-    """Skills whose row in TRANSFORMS.md says this repository is the source."""
-    rows = re.findall(r"^\| `([a-z0-9-]+)` \| this repository is the source of truth \|$",
-                      (repo / "TRANSFORMS.md").read_text(), re.M)
-    return set(rows)
+    """Top-level directories of this repository that hold a SKILL.md."""
+    return {d.name for d in repo.iterdir() if (d / "SKILL.md").is_file()}
 
 
 def is_stamp_only(repo, sha, skill):
