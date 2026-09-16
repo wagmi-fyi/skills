@@ -76,11 +76,11 @@ from a source tree.
 
 ## The neutrality gate
 
-No published file names the publisher's own machines, products or people. The
-gate is a grep, and it runs with a control so that its exit 1 is a measurement
-rather than an unreachable branch:
+No published file names the publisher's own machines or people, or a name the
+publisher has retired. The gate is a grep, and it runs with a control so that
+its exit 1 is a measurement rather than an unreachable branch:
 
-    /usr/bin/grep -rniE 'commonclaw|\bclaw\b|claws|\btyr\b|tyr-|jeremiah|/srv/' <skill trees>
+    /usr/bin/grep -rniE '\btyr\b|tyr-|jeremiah|/srv/' <skill trees>
 
 Exit 1 over the published trees is the pass. The house words are anchored on
 word boundaries, because unanchored they match ordinary content: "tyr" sits
@@ -88,9 +88,9 @@ inside "EntityRef", a QuickBooks field name. Run the same pattern over a file
 known to hold house vocabulary and confirm it exits 0, or the check proves
 nothing.
 
-`wagmi` in a README is the publisher naming itself in its own repository. The
-pattern excludes that case by design, and the exclusion is a rule rather than an
-oversight.
+`wagmi` and `commonclaw` are the publisher and its product naming themselves,
+and `claw` is the product's word for a machine that runs it. The pattern leaves
+them out by design.
 
 ## A file that cannot pass the gate does not publish, and the fix is upstream
 
