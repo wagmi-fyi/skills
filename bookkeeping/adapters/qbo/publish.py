@@ -55,9 +55,38 @@ from dotenv import load_dotenv
 
 _config = config_loader.load_config()
 ENV_PATH = os.path.join(_config['local_dir'], 'adapters', '.env')
-LOCK_FILE = os.path.join(script_dir, '.publish.lock')
+LOCK_NAME = '.publish.lock'
 
 load_dotenv(ENV_PATH)
+
+
+# =============================================================================
+# Lock
+# =============================================================================
+
+class LockPathError(Exception):
+    pass
+
+
+def publish_lock_path(config: Dict) -> str:
+    """Return the publish lock path, in the client's database_dir.
+
+    The lock guards one company's books, so it sits beside them. Raises
+    LockPathError, naming the path and the reason, when that directory is
+    unset, missing, or not writable.
+    """
+    db_dir = config.get('database_dir')
+    if not db_dir:
+        raise LockPathError(
+            "The config has no database_dir. The publish lock is kept there. "
+            "Set database_dir in the config.")
+    if not os.path.isdir(db_dir):
+        raise LockPathError(
+            f"The publish lock goes in {db_dir}, and that directory does not exist.")
+    if not os.access(db_dir, os.W_OK | os.X_OK):
+        raise LockPathError(
+            f"The publish lock goes in {db_dir}, and this user cannot write there.")
+    return os.path.join(db_dir, LOCK_NAME)
 
 
 # =============================================================================
@@ -188,12 +217,19 @@ def main():
 
         # Acquire lock for non-dry-run
         if not args.dry_run:
-            lock = FileLock(LOCK_FILE)
-            if not lock.acquire():
-                print(json.dumps({
-                    "success": False, "dry_run": False,
-                    "error": "Another instance is already running. Delete lock file if incorrect: " + LOCK_FILE
-                }))
+            try:
+                lock_path = publish_lock_path(_config)
+                lock = FileLock(lock_path)
+                held = not lock.acquire()
+            except LockPathError as e:
+                refusal = str(e)
+            except OSError as e:
+                refusal = f"The publish lock file could not be created at {e.filename}: {e.strerror}."
+            else:
+                refusal = (f"Another publish for this company is running. "
+                           f"It holds the lock at {lock_path}.") if held else None
+            if refusal:
+                print(json.dumps({"success": False, "dry_run": False, "error": refusal}))
                 sys.exit(1)
 
         # Validate credentials
