@@ -34,6 +34,6 @@ Every database skill has a first-run path: auto-create from the schema reference
 
 Git ignores the database, so the backup path is deliberate, never assumed:
 
-- **Baseline, zero dependency:** before each mutating run, `VACUUM INTO` a snapshot in the system temp directory — the need expires when the run verifies, so let the OS clean up. Period closes and other milestones get durable snapshots: the remote convention where it's wired, else a short rotation in `database/backups/`.
+- **Baseline, zero dependency:** before each mutating run, `VACUUM INTO` a snapshot in a private directory under the system temp directory. `mktemp -d` makes one. The need expires when the run verifies, so let the OS clean up. Period closes and other milestones get durable snapshots: the remote convention where it's wired, else a short rotation in `database/backups/`.
 - **Remote — required once real client work is involved.** A laptop-local backup dies with the laptop. Check what already covers the workspace (whole-machine cloud backup may suffice); otherwise replicate continuously with Litestream (0.5.8+) to storage you control, or push snapshots there. Encrypted at rest; credentials via the secrets manager; the destination named in the skill's Dependencies.
 - `_workpapers/` is state the same as the database and rides the same remote convention.

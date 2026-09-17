@@ -3,7 +3,7 @@ name: master-builder
 license: Apache-2.0
 description: "Build and improve agent skills on the machine the agent runs on. Use when creating a new skill, recording a workflow as a skill, interviewing a human about a workflow to design a skill, improving or hardening an existing skill, or setting up a skills workspace."
 metadata:
-  version: "08c944f 2026-09-17"
+  version: "c3b0492 2026-09-17"
 ---
 
 # Master Builder
