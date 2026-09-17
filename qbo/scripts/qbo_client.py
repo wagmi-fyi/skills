@@ -3,6 +3,7 @@
 QBO Client - Shared authentication and entity mapping module for QuickBooks Online.
 """
 
+import errno
 import fcntl
 import json
 import os
@@ -753,18 +754,27 @@ class FileLock:
         self.lock_file = None
 
     def acquire(self) -> bool:
-        """Acquire lock. Returns True if successful, False if already locked."""
+        """Take the lock. Returns False when another process holds it.
+
+        Any other failure, such as a lock file that cannot be created, raises
+        OSError with its errno and the lock path.
+        """
         try:
-            self.lock_file = open(self.lock_path, 'w')
-            fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.lock_file.write(str(os.getpid()))
-            self.lock_file.flush()
-            return True
-        except (IOError, OSError):
-            if self.lock_file:
-                self.lock_file.close()
-                self.lock_file = None
-            return False
+            lock_file = open(self.lock_path, 'a')
+        except OSError as e:
+            raise OSError(e.errno, e.strerror, self.lock_path) from e
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            lock_file.close()
+            if e.errno in (errno.EAGAIN, errno.EACCES):
+                return False
+            raise OSError(e.errno, e.strerror, self.lock_path) from e
+        lock_file.truncate(0)
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        self.lock_file = lock_file
+        return True
 
     def release(self):
         """Release the lock."""

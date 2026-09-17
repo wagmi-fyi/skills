@@ -142,8 +142,10 @@ file called `UPDATE` in the skill's folder:
 | `confirm` | The agent asks you first. |
 | `pin` | The agent keeps the version you have. |
 
-The script notes when it last checked in a file called `.update-check`. Delete
-that file to check again now. If the check fails, or the skill is installed for
+The script notes when it last checked in a file called `.update-check` in the
+skill's folder. If that folder is read-only, the file is
+`~/.cache/skill-update-check/<skill folder name>`. Delete that file to check
+again now. If the check fails, or the skill is installed for
 everyone on a machine, the agent keeps the version you have.
 
 ## Format
