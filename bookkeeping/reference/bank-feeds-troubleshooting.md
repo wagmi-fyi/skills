@@ -10,19 +10,20 @@ Work top-down; each step localizes the fault:
 2. **FC account + refresh state:** `stripe_fc_refresh.py --account_id {fca}` (read mode) — `account_status` active? Refresh statuses `succeeded`/`pending`/`failed`? `next_refresh_available_at` in the future?
 3. **Balance freshness:** `stripe_fc_balances.py --account_id {fca}` — does `as_of` move after a refresh? A frozen `as_of` with an active account suggests institution-side staleness.
 4. **AMA layer:** `ama_client.py status --bundle_id {id}` for connection-era questions; AMA HTTP errors pass through verbatim.
-5. **Platform escalation:** a service outage (5xx) or a suspended firm belongs to whoever runs the AMA copy the adapter calls. A lost firm key does not: sign up again.
+5. **Platform escalation:** a service outage (5xx) or a suspended firm belongs to whoever runs the AMA copy the adapter calls. For a lost firm key, sign up again.
 
 ## Failure table
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| AMA HTTP 401 | `AMA_FIRM_API_KEY` missing/wrong in `{local_dir}/adapters/.env`, or firm suspended | Check the key is present. A lost key cannot be recovered: `ama_client.py signup --replace` makes a new firm and saves its key. A suspended firm is for whoever runs the service |
+| AMA HTTP 401 | `AMA_FIRM_API_KEY` missing/wrong in `{local_dir}/adapters/.env`, or firm suspended | Check the key is present. A lost key cannot be recovered: `uv run --no-project --with-requirements requirements.txt adapters/ama_client.py signup --firm_name "{firm}" --replace`, from the skill directory, makes a new firm and saves its key. A suspended firm is for whoever runs the service |
 | AMA HTTP 403 `provider_account_mismatch` | The Stripe keys belong to another account than the firm's first link used | Use the keys for the firm's own Stripe account, or sign up a new firm for the other account |
-| AMA HTTP 502 `provider_identify_failed` | The service could not read which Stripe account the key belongs to | Check the key, and that a restricted key has **Accounts: Read** |
+| AMA HTTP 502 `provider_identify_failed` | The service could not read which Stripe account the key belongs to | Check in the Stripe Dashboard that the key is right and not revoked |
+| The client's link page shows no company name | The Stripe key lacks **Accounts: Read**, or it is a test key | Accounts: Read is recommended. With it, the firm is tied to its own Stripe account, and the client sees the company name Stripe verified. Links work without it |
 | `signup` refused | Too many sign-ups from this network, or the day's sign-ups are used up | The message says when to try again. Nothing was saved |
 | AMA HTTP 404 on bundle | Wrong `bundle_id`, or bundle belongs to a different firm | Re-check the id from the create-bundle output in the workpaper |
 | AMA HTTP 429 | Rate limit | Respect `Retry-After`; don't loop |
-| `create-bundle` fails with Stripe permission error | Restricted key missing **Customers: Write** (AMA creates one transient Customer per bundle) or **Accounts: Read** (AMA checks which account the key belongs to), or FC not enabled for live mode | Fix key scopes / enable FC in the Stripe Dashboard |
+| `create-bundle` fails with Stripe permission error | Restricted key missing **Customers: Write** (AMA creates one transient Customer per bundle), or FC not enabled for live mode | Fix key scopes / enable FC in the Stripe Dashboard |
 | Client finished connecting but `status` shows no accounts | Browser-side submission failed (origin validation) — platform-level | Escalate: platform runbook, "origin validation" diagnostic |
 | Refresh trigger fails: "account is inactive" | Connection broken/revoked at the bank | **Re-auth procedure** (below) |
 | `transaction_refresh.status: failed` | Transient institution failure, or broken connection | Re-trigger once after a pause; if it fails again or account goes inactive → re-auth |

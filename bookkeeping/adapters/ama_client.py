@@ -57,7 +57,7 @@ SIGNUP_MESSAGES = {
                        "To sign up a new firm and put its key in its place, run the same "
                        "command with --replace. The old key keeps working until its firm "
                        "is suspended.",
-    'no_name': "No firm name available. Pass --firm_name, or set firm_name in config.yaml. "
+    'no_name': "No firm name was given. Pass --firm_name, or set firm_name in config.yaml. "
                "Nothing was sent.",
     'cannot_write': "Cannot write the firm key to {path}: {reason}. Nothing was sent.",
     'refused': "The service refused the sign-up: {words}. Nothing was saved.",
