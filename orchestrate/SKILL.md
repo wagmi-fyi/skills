@@ -3,7 +3,7 @@ name: orchestrate
 license: Apache-2.0
 description: "Run a verifying, multi-session orchestration: bootstrap a delegated project (plan + workpaper), dispatch work to human-reachable sessions over a built-in message bus, spawn delegates on whatever substrate the machine runs, and re-verify every result. Use when coordinating several agent sessions on one machine, running an orchestrator plus delegated workers, delegating build/migration/research units while staying lean, or setting up the session-bus. Pauses for design crossroads and human-only steps; runs autonomously otherwise."
 metadata:
-  version: "08c944f 2026-09-17"
+  version: "3306cda 2026-09-17"
 ---
 
 # Orchestrate

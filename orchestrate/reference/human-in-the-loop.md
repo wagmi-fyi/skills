@@ -20,9 +20,9 @@ Do **not** pause for permission to do reversible, planned, intended work — tha
 | Change class | Rollback path to establish first |
 |---|---|
 | Code / files | checkpoint commit or a working branch; or copy-aside |
-| Database | snapshot/dump to `/tmp` — **never inside a tracked project/output dir** (a `.db`/`.bak` there evades gitignore and gets committed); or a `.bak` table; record the pre-state |
+| Database | snapshot or dump to a directory only you can read, outside every tracked project or output directory (a `.db` or `.bak` there evades gitignore and gets committed). A copy of the data is as sensitive as the data. Check who can read it. `mktemp -d` makes such a directory on most systems. Or a `.bak` table. Record the pre-state. |
 | Cluster / deploy | record the current rev + the exact rollback command |
-| Bulk filesystem op | tar/copy the target aside |
+| Bulk filesystem op | tar or copy the target aside, into a directory only you can read |
 | External action the agent can itself undo | the in-system undo (delete the record you created, unpublish, restore from the system's trash/history) — **reversible → proceed** |
 | Truly irreversible (sent message, payment, destructive delete, no recovery) | **none possible → pause (human-only)** |
 
