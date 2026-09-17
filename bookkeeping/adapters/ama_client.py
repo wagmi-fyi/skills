@@ -7,6 +7,9 @@ results come back as Stripe Financial Connections account IDs (fca_xxx) ready
 for scripts/manage_bank_feeds.py and the stripe_fc_* adapters.
 
 Usage:
+    # Sign up a firm; its key is saved in {local_dir}/adapters/.env
+    python adapters/ama_client.py signup --firm_name "Your Firm" [--replace]
+
     # Create a bundle (returns URL to send to the client)
     python adapters/ama_client.py create-bundle
     python adapters/ama_client.py create-bundle --firm_name "Your Firm" \\
@@ -18,7 +21,7 @@ Usage:
     python adapters/ama_client.py status --bundle_id <uuid>
 
 Environment (from {local_dir}/adapters/.env):
-    AMA_FIRM_API_KEY        required — firm API key (acp_...)
+    AMA_FIRM_API_KEY        firm API key (acp_...); signup writes it, every other command needs it
     AMA_API_URL             optional — defaults to production AMA
     STRIPE_API_KEY          create-bundle only — passed transiently to AMA, never stored there
     STRIPE_PUBLISHABLE_KEY  create-bundle only
@@ -26,8 +29,10 @@ Environment (from {local_dir}/adapters/.env):
 
 import argparse
 import json
+import math
 import sys
 import os
+import tempfile
 import urllib.request
 import urllib.error
 
@@ -41,6 +46,31 @@ from dotenv import load_dotenv
 load_dotenv(ENV_PATH)
 
 DEFAULT_API_URL = "https://auth-my-accountant.vercel.app"
+
+# Every sentence signup prints lives here, so the wording can be read and
+# changed in one place.
+SIGNUP_MESSAGES = {
+    'saved': "Signed up {name}. Your firm key is saved in {path} as AMA_FIRM_API_KEY, "
+             "readable by you only.\n"
+             "The service keeps no copy of the key. If this file is lost, sign up again.",
+    'already_has_key': "A firm key is already saved in {path}. Nothing was changed. "
+                       "To sign up a new firm and put its key in its place, run the same "
+                       "command with --replace. The old key keeps working until its firm "
+                       "is suspended.",
+    'no_name': "No firm name available. Pass --firm_name, or set firm_name in config.yaml. "
+               "Nothing was sent.",
+    'cannot_write': "Cannot write the firm key to {path}: {reason}. Nothing was sent.",
+    'refused': "The service refused the sign-up: {words}. Nothing was saved.",
+    'daily_cap': "Sign-ups are closed for today because the daily limit was reached. "
+                 "Try again after midnight UTC. Nothing was saved.",
+    'rate_limited': "Too many sign-ups from this network. Try again in {minutes} {unit}. "
+                    "Nothing was saved.",
+    'unreachable': "Could not reach {url}: {reason}. Nothing was saved.",
+    'lost': "The firm was made, but its key could not be saved to {path}: {reason}. "
+            "The key is gone. Run signup again.",
+}
+
+KEY_NAME = 'AMA_FIRM_API_KEY'
 
 # Session permissions enum (AMA validation.ts createBundleSchema) — plural "balances",
 # unlike the refresh feature enum which uses singular "balance".
@@ -79,6 +109,13 @@ def parse_arguments():
                         help='Comma-separated session permissions (plural enum: balances)')
     create.add_argument('--prefetch', default='transactions,balances',
                         help='Comma-separated data to prefetch at connect time (empty to disable)')
+
+    signup = subparsers.add_parser(
+        'signup', help='Sign up a firm and save its key in the adapter settings file')
+    signup.add_argument('--firm_name', default=None,
+                        help='The firm name to sign up (default: firm_name from config)')
+    signup.add_argument('--replace', action='store_true',
+                        help='Put the new key in place of a key the settings file already holds')
 
     status = subparsers.add_parser('status', help='Get bundle status and connected accounts')
     status.add_argument('--bundle_id', required=True, help='Bundle UUID from create-bundle')
@@ -271,6 +308,127 @@ def cmd_status(args, api_url):
     }, indent=2))
 
 
+def fail(message):
+    """Print a failure the adapter's way and stop."""
+    print(json.dumps({"success": False, "error": message}))
+    sys.exit(1)
+
+
+def env_line_key(line):
+    """The variable a settings-file line assigns, or None."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith('#') or '=' not in stripped:
+        return None
+    name = stripped.split('=', 1)[0].strip()
+    if name.startswith('export '):
+        name = name[len('export '):].strip()
+    return name
+
+
+def holds_key(lines):
+    """True when a settings-file line gives AMA_FIRM_API_KEY a value."""
+    for line in lines:
+        if env_line_key(line) == KEY_NAME:
+            value = line.split('=', 1)[1].strip().strip('"\'')
+            if value:
+                return True
+    return False
+
+
+def signup_request(api_url, firm_name):
+    """POST the sign-up. Returns (status, body dict, headers)."""
+    req = urllib.request.Request(
+        f"{api_url}/api/signup",
+        data=json.dumps({"name": firm_name}).encode('utf-8'),
+        method='POST',
+    )
+    req.add_header('Content-Type', 'application/json')
+    req.add_header('User-Agent', 'bookkeeping-ama-client/1.0')
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, json.loads(resp.read().decode('utf-8')), resp.headers
+    except urllib.error.HTTPError as e:
+        text = e.read().decode('utf-8', errors='replace')
+        try:
+            body = json.loads(text)
+        except ValueError:
+            body = {"error": text.strip()[:200] or e.reason}
+        return e.code, body, e.headers
+
+
+def refusal_message(status, body, headers):
+    """The sentence for a sign-up the service did not accept."""
+    code = body.get('code') if isinstance(body, dict) else None
+    if code == 'daily_cap_reached':
+        return SIGNUP_MESSAGES['daily_cap']
+    if code == 'rate_limited':
+        try:
+            minutes = max(1, math.ceil(int(headers.get('Retry-After')) / 60))
+        except (TypeError, ValueError):
+            minutes = 60
+        return SIGNUP_MESSAGES['rate_limited'].format(
+            minutes=minutes, unit='minute' if minutes == 1 else 'minutes')
+    words = (body.get('error') if isinstance(body, dict) else None) or f"HTTP {status}"
+    return SIGNUP_MESSAGES['refused'].format(words=str(words).rstrip('.'))
+
+
+def cmd_signup(args, api_url, env_path=None):
+    """Sign up a firm and save its key. The key is never printed."""
+    env_path = env_path or ENV_PATH
+    firm_name = (args.firm_name or _config.get('firm_name') or '').strip()
+    if not firm_name:
+        fail(SIGNUP_MESSAGES['no_name'])
+
+    lines = []
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            lines = f.read().splitlines()
+    if holds_key(lines) and not args.replace:
+        fail(SIGNUP_MESSAGES['already_has_key'].format(path=env_path))
+
+    # Prove the file can be written before a key exists to lose.
+    env_dir = os.path.dirname(env_path)
+    try:
+        os.makedirs(env_dir, mode=0o700, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=env_dir, prefix='.env.', suffix='.tmp')
+    except OSError as e:
+        fail(SIGNUP_MESSAGES['cannot_write'].format(path=env_path, reason=e.strerror or e))
+
+    try:
+        try:
+            status, body, headers = signup_request(api_url, firm_name)
+        except urllib.error.URLError as e:
+            fail(SIGNUP_MESSAGES['unreachable'].format(url=api_url, reason=e.reason))
+        if status != 201 or not isinstance(body, dict) or not body.get('api_key'):
+            fail(refusal_message(status, body, headers))
+
+        kept = [line for line in lines if env_line_key(line) != KEY_NAME]
+        content = '\n'.join(kept + [f"{KEY_NAME}={body['api_key']}"]) + '\n'
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                fd = None
+                f.write(content)
+            os.replace(tmp_path, env_path)
+            tmp_path = None
+        except OSError as e:
+            fail(SIGNUP_MESSAGES['lost'].format(path=env_path, reason=e.strerror or e))
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if tmp_path is not None and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    print(SIGNUP_MESSAGES['saved'].format(name=body.get('name', firm_name), path=env_path),
+          file=sys.stderr)
+    print(json.dumps({
+        "success": True,
+        "firm_id": body.get('id'),
+        "firm_name": body.get('name'),
+        "saved_to": env_path,
+    }, indent=2))
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -284,6 +442,8 @@ def main():
             cmd_create_bundle(args, api_url)
         elif args.command == 'status':
             cmd_status(args, api_url)
+        elif args.command == 'signup':
+            cmd_signup(args, api_url)
 
     except Exception as e:
         import traceback

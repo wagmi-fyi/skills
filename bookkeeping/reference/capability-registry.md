@@ -447,10 +447,11 @@ If `{firm_root}` is not set, steps 3-4 are skipped. Core adapters documented bel
 - **Purpose:** Client for the Auth My Accountant (AMA) session broker. Creates multi-institution auth bundles (one URL the client uses to connect several banks via Stripe FC) and retrieves connected-account results (`fca_xxx` IDs + metadata).
 - **Domain:** Utilities (Integration)
 - **Arguments (subcommands):**
+  - `signup [--firm_name] [--replace]` -- Sign up a firm on the service and write its key to `{local_dir}/adapters/.env` as `AMA_FIRM_API_KEY`, mode 0600. Refuses when the file already holds a key, unless `--replace`. Never prints the key. `--firm_name` defaults to `firm_name` in config.
   - `create-bundle [--consent_title] [--consent_body] [--firm_name] [--client_ref] [--max_sessions 5] [--expires_in_hours 72] [--permissions transactions,balances] [--prefetch transactions,balances]` -- Create a bundle; outputs the URL to send to the client. Permissions/prefetch use the PLURAL `balances` enum (unlike the refresh feature enum).
   - `status --bundle_id <uuid>` -- Get bundle status and flattened connected accounts.
-- **Output:** `create-bundle`: `{"success", "bundle_id", "url", "token", "status", "expires_at", "max_sessions", "client_ref"}`. `status`: `{"success", "bundle_id", "status", "client_ref", "sessions_completed", "sessions_total", "expires_at", "accounts": [{provider_account_id, institution_name, last4, category, subcategory, display_name, account_status, session_index}]}`.
-- **Preconditions:** `AMA_FIRM_API_KEY` in `{local_dir}/adapters/.env`; `create-bundle` additionally requires `STRIPE_API_KEY`/`STRIPE_PUBLISHABLE_KEY` (the sk/pk prefix -- `sk_test_`/`sk_live_` -- determines mode). `AMA_API_URL` optional (defaults to production).
+- **Output:** `signup`: `{"success", "firm_id", "firm_name", "saved_to"}`. `create-bundle`: `{"success", "bundle_id", "url", "token", "status", "expires_at", "max_sessions", "client_ref"}`. `status`: `{"success", "bundle_id", "status", "client_ref", "sessions_completed", "sessions_total", "expires_at", "accounts": [{provider_account_id, institution_name, last4, category, subcategory, display_name, account_status, session_index}]}`.
+- **Preconditions:** `AMA_FIRM_API_KEY` in `{local_dir}/adapters/.env`, except for `signup`, which writes it; `create-bundle` additionally requires `STRIPE_API_KEY`/`STRIPE_PUBLISHABLE_KEY` (the sk/pk prefix -- `sk_test_`/`sk_live_` -- determines mode). `AMA_API_URL` optional (defaults to production).
 - **Tables:** None.
 - **When to use:** During `operations/connect-bank-feeds.md` to establish bank connections. Accounts remain retrievable from expired bundles, so late `status` polling is safe.
 

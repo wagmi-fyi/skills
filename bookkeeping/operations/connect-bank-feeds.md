@@ -14,7 +14,7 @@ Run once per client at adoption, and again whenever accounts are added, repaired
 
 1. `BOOKKEEPING_CONFIG_PATH` set to the client's `_local-bookkeeping/config.yaml`.
 2. `stripe` package importable in the project venv.
-3. `{local_dir}/adapters/.env` contains `AMA_FIRM_API_KEY`, `STRIPE_API_KEY`, `STRIPE_PUBLISHABLE_KEY`. Confirm the sk/pk prefixes match the intended mode (test vs live) and each other.
+3. `{local_dir}/adapters/.env` contains `AMA_FIRM_API_KEY`, `STRIPE_API_KEY`, `STRIPE_PUBLISHABLE_KEY`. Confirm the sk/pk prefixes match the intended mode (test vs live) and each other. With no firm key yet, `ama_client.py signup --firm_name "{firm}"` makes one and saves it. A restricted Stripe key needs Accounts: Read, Financial Connections: Read and Write, and Customers: Write. The first link binds the firm to that Stripe account.
 4. The target chart-of-accounts codes exist (`manage_bank_feeds.py add` validates this, but resolve gaps before sending a link to a client).
 5. Live runs only: Financial Connections enabled for the Stripe account (Dashboard → Financial Connections), including transactions data access.
 
