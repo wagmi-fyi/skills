@@ -31,7 +31,7 @@ def get_import_data(conn: sqlite3.Connection, import_id: str) -> Dict:
     """
     Fetch import record with validation.
     Returns dict with: id, source, banking_date, amount, balance_type, bank_account_code
-    Raises ValueError if import doesn't exist, is already processed, or has invalid data.
+    Raises ValueError if the import doesn't exist, already has a journal entry (processed=1), or has invalid data. A client question (processed=2) has no entry yet, so it passes.
     """
     cursor = conn.cursor()
     cursor.execute(
@@ -49,8 +49,8 @@ def get_import_data(conn: sqlite3.Connection, import_id: str) -> Dict:
 
     import_id, source, banking_date, amount, raw_data_json, processed = row
 
-    if processed:
-        raise ValueError(f"Import ID {import_id} already processed")
+    if processed == 1:
+        raise ValueError(f"Import ID {import_id} already has a journal entry")
 
     # Parse raw_data JSON to get balance_type
     try:
