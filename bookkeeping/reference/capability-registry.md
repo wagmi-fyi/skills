@@ -111,6 +111,24 @@ If `{firm_root}` is not set, steps 3-4 are skipped. Core adapters documented bel
 - **Tables:** Reads `categorization_rules`, `imports`, `postings`, `journal_entries`.
 - **When to use:** Before activating a new or modified rule, to validate its accuracy against historical data.
 
+### create_cat_rule.py
+
+- **Purpose:** Creates categorization rules without raw SQL, and switches a rule on, switches it off, or deletes it. Switched off means `active = 0`. A new rule is checked, added switched off, tested against coded history the way `test_cat_rule.py` tests it, and switched on only when the test passes.
+- **Domain:** Categorize
+- **Arguments (one of the first five is required):**
+  - `--rules` (str/JSON) -- One rule or a list. The rule shape is in `--help`.
+  - `--file` (str) -- Path to a JSON file in the same shape.
+  - `--activate` (str) -- Rule ID. Tests a switched-off rule again and switches it on if it passes.
+  - `--deactivate` (str) -- Rule ID. Switches off a rule that is switched on.
+  - `--delete` (str) -- Rule ID. Deletes a rule that is switched off.
+  - `--force` (str, optional) -- With `--activate`: a reason. Switches the rule on even when the test fails.
+  - `--changed_by` (str, optional) -- Audit log attribution.
+- **Output:** JSON. The keys for each action are in `--help`.
+- **Decision rules:** A check that fails writes nothing: criteria the rule matcher cannot run, no conditions, an account code outside the chart of accounts, an unknown tag or class, amounts that do not split. A contact that does not exist is listed as new and is created when the rule first applies. The test passes at 100 percent accuracy or zero historical matches. A priority left out is chosen from the criteria: specific ones run first, broad ones run after every other rule, and a number already taken moves up. A forced rule has a recorded reason and a failed test, so review it at the next period. Every change writes an audit log row.
+- **Preconditions:** Chart of accounts loaded. The rule meets the criteria in `bookkeeping-principles.md` (Principles 1 and 3).
+- **Tables:** Reads `chart_of_accounts`, `contacts`, `tags`, `imports`, `journal_entries`, `postings`; writes `categorization_rules`, `audit_log`.
+- **When to use:** Whenever a confirmed pattern becomes a rule, to switch on a rule the test held back, and to switch off or delete a rule.
+
 ---
 
 ## 3. Trade Accounts
@@ -467,7 +485,7 @@ These are imported by scripts, not invoked directly from the CLI.
   - `extract_field(import_record, field_name)` -- Extracts value from import record. Fields: `reference`, `amount`, `source`, `any_text`.
   - `evaluate_condition(field_value, operator, expected_value)` -- Operators: `equals`, `contains`, `starts_with`, `is_blank`, `less_than`, `greater_than`, `equals_number`.
   - `match_rule(import_record, rule)` -- Returns True/False. Respects `logic: "all"` (AND) or `"any"` (OR).
-- **Used by:** `apply_cat_rules.py`, `test_cat_rule.py`.
+- **Used by:** `apply_cat_rules.py`, `test_cat_rule.py`, `create_cat_rule.py`.
 
 ### _shared/trade_account_utils.py
 
@@ -495,7 +513,7 @@ These are imported by scripts, not invoked directly from the CLI.
   - `create_journal_entry(conn, categorization, import_data, confidence_score?, metadata?, class_name?)` -- Import-linked JE creation. Supports standard mode (auto-direction) and explicit mode (caller-specified direction per posting).
   - `create_journal_entry_direct(conn, transaction_date, memo, postings_data, je_metadata?)` -- Direct JE creation with pre-built postings (no import link). Used by manual journals, trade account scripts.
   - `create_journal_entry_transfer(conn, import_id, transaction_date, memo, postings_data, all_import_ids, class_name?, je_metadata?)` -- Transfer JE linking multiple imports. Stores `transfer_group` in metadata.
-- **Used by:** `bulk_cat_transactions.py`, `apply_cat_rules.py`, `test_cat_rule.py`, `apply_transfer.py`, `apply_payment.py`, `apply_payments_bulk.py`, `create_manual_journal.py`.
+- **Used by:** `bulk_cat_transactions.py`, `apply_cat_rules.py`, `test_cat_rule.py`, `create_cat_rule.py`, `apply_transfer.py`, `apply_payment.py`, `apply_payments_bulk.py`, `create_manual_journal.py`.
 
 ### _shared/__init__.py
 
