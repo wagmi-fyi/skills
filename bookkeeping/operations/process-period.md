@@ -184,6 +184,7 @@ Connections and mappings are established via `operations/connect-bank-feeds.md`.
 - `apply_cat_rules.py` -- runs all active rules against unprocessed imports in priority order
 - `bulk_cat_transactions.py` -- creates journal entries from AI-generated categorizations; marks low-confidence items as `processed=2`
 - `test_cat_rule.py` -- dry-run simulator for rule accuracy testing
+- `create_cat_rule.py` -- creates a rule, tests it, and switches it on only when the test passes
 - `apply_transfer.py` -- links multiple imports from different feeds into a single balanced journal entry
 
 **Processing order (this sequence matters):**
@@ -212,9 +213,9 @@ Connections and mappings are established via `operations/connect-bank-feeds.md`.
    - Watch for crossed account types (expense coded to revenue, asset as liability) -- these are red flags
    - On batch script failure, retry once, then log error, skip batch, and continue with next segment
 
-6. **Create rules from confirmed patterns.** Track patterns worthy of rule creation. Criteria: (1) second or later occurrence of same vendor pattern, (2) consistent account code across history, (3) clear match criteria formulable. Always test rules before inserting using `test_cat_rule.py`. 100% accuracy or zero historical matches -> proceed. Below 100% -> present mismatches and offer update/delete/keep options.
+6. **Create rules from confirmed patterns.** Track patterns worthy of rule creation. Criteria: (1) second or later occurrence of same vendor pattern, (2) consistent account code across history, (3) clear match criteria formulable. Create each rule with `create_cat_rule.py`. It tests the rule before switching it on. A rule that fails the test stays off, and the output lists the mismatches. Present them and offer to fix the rule, delete it, or switch it on with a recorded reason.
 
-**Context complexity alert:** If pattern count exceeds 5, warn the user about context strain and offer: [A] proceed anyway, [B] skip and defer to fresh session. Save the pending patterns to `{workpapers_dir}/period-close/{periodLabel}/` (e.g., `rules-to-create-{date}.md`) and provide the path for standalone invocation.
+**Context complexity alert:** If pattern count exceeds 5, warn the user about context strain and offer: [A] proceed anyway, [B] skip and defer to fresh session. Save the pending patterns to `{workpapers_dir}/period-close/{periodLabel}/` (e.g., `rules-to-create-{date}.md`) and provide the path. A fresh session formulates the rules from that file and creates them with `create_cat_rule.py`.
 
 **Quality gate:** `SELECT COUNT(*) FROM imports WHERE processed = 0` must equal zero. Both `processed=1` and `processed=2` are valid terminal states.
 
@@ -388,8 +389,8 @@ Connections and mappings are established via `operations/connect-bank-feeds.md`.
 
 **Processing responses:** Three feedback collection modes: one at a time, all at once (paste full response), or from file (annotated Excel). Item-by-item processing with user confirmation on each action:
 - **Code it:** Invoke `bulk_cat_transactions.py`
-- **Create rule:** Invoke `create-cat-rule` sub-workflow or guide manual creation
-- **Adjust existing rule:** Present current rule, apply change after confirmation
+- **Create rule:** Invoke `create_cat_rule.py`
+- **Adjust existing rule:** Present the current rule and the change. After confirmation, switch the rule off with `create_cat_rule.py --deactivate`, delete it, and create it again with the change.
 - **Defer:** Record reason for later re-run
 
 Database mutations only via scripts, never direct writes. Cross-workflow knowledge updates during feedback processing: categorization patterns and payment patterns flow to the relevant domain context files (loaded from the local context registry).

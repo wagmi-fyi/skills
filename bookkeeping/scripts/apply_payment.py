@@ -87,8 +87,8 @@ def get_import_account_code(conn, import_id):
     if not row:
         raise ValueError(f"Import not found: {import_id}")
 
-    if row[1]:
-        raise ValueError(f"Import already processed: {import_id}")
+    if row[1] == 1:
+        raise ValueError(f"Import already has a journal entry: {import_id}")
 
     return parse_source(row[0])
 

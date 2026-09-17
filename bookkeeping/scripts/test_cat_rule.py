@@ -177,6 +177,118 @@ def compare_categorizations(simulated_postings, actual_postings, bank_account_co
     return ("match", None, [])
 
 
+def run_test(conn, rule_id, start_date=None, end_date=None, source_filter=None):
+    """
+    Test one rule against processed imports and return the results dict.
+    The rule is read through conn, so a caller can test a rule it has not
+    committed yet. Raises ValueError when the rule is not found.
+    """
+    # Load rule
+    rule = load_rule(conn, rule_id)
+
+    # Load processed imports with filters
+    imports = load_processed_imports(
+        conn,
+        start_date=start_date,
+        end_date=end_date,
+        source_filter=source_filter
+    )
+
+    # Initialize results
+    results = {
+        "success": True,
+        "rule_id": rule['id'],
+        "rule_name": rule['name'],
+        "total_imports_tested": len(imports),
+        "rule_matches": 0,
+        "accurate_predictions": 0,
+        "partial_matches": 0,
+        "mismatches": 0,
+        "accuracy_percentage": None,
+        "warning": None,
+        "details": []
+    }
+
+    # Test each import
+    for import_record in imports:
+        # Get description for reporting
+        description = import_record['raw_data'].get('Reference', '')
+
+        # Test if rule matches
+        rule_matched = rule_matcher.match_rule(import_record, rule)
+
+        if rule_matched:
+            results["rule_matches"] += 1
+
+            # Get bank account code (needed to filter bank posting from comparison)
+            try:
+                bank_account_code = journal_engine.parse_source(import_record['source'])
+            except ValueError:
+                bank_account_code = ""
+
+            # Simulate postings
+            simulated_postings = simulate_postings(rule)
+
+            # Load actual postings
+            actual_postings = load_actual_postings(conn, import_record['id'])
+
+            # Compare (three-tier)
+            comparison, mismatch_reason, warnings = compare_categorizations(
+                simulated_postings,
+                actual_postings,
+                bank_account_code
+            )
+
+            if comparison == "match":
+                results["accurate_predictions"] += 1
+            elif comparison == "match_with_warnings":
+                results["partial_matches"] += 1
+            elif comparison == "mismatch":
+                results["mismatches"] += 1
+
+            # Add to details
+            results["details"].append({
+                "import_id": import_record['id'],
+                "banking_date": import_record['banking_date'],
+                "amount": import_record['amount'],
+                "description": description,
+                "rule_matched": True,
+                "comparison": comparison,
+                "simulated_postings": simulated_postings,
+                "actual_postings": actual_postings,
+                "mismatch_reason": mismatch_reason,
+                "warnings": warnings
+            })
+        else:
+            # Rule didn't match - include actual postings for visibility
+            actual_postings = load_actual_postings(conn, import_record['id'])
+            results["details"].append({
+                "import_id": import_record['id'],
+                "banking_date": import_record['banking_date'],
+                "amount": import_record['amount'],
+                "description": description,
+                "rule_matched": False,
+                "comparison": None,
+                "simulated_postings": None,
+                "actual_postings": actual_postings,
+                "mismatch_reason": None,
+                "warnings": []
+            })
+
+    # Calculate accuracy percentage (partial matches count as accounts-correct)
+    if results["rule_matches"] > 0:
+        accounts_correct = results["accurate_predictions"] + results["partial_matches"]
+        results["accuracy_percentage"] = round(
+            (accounts_correct / results["rule_matches"]) * 100,
+            2
+        )
+    else:
+        results["accuracy_percentage"] = None
+        results["warning"] = "Rule did not match any transactions in the test set. Consider reviewing rule conditions or testing with a different date range."
+
+    return results
+
+
 def main():
     """Main execution function."""
     args = parse_arguments()
@@ -192,108 +304,13 @@ def main():
         sys.exit(1)
 
     try:
-        # Load rule
-        rule = load_rule(conn, args.rule_id)
-
-        # Load processed imports with filters
-        imports = load_processed_imports(
+        results = run_test(
             conn,
+            args.rule_id,
             start_date=args.start_date,
             end_date=args.end_date,
             source_filter=args.source_filter
         )
-
-        # Initialize results
-        results = {
-            "success": True,
-            "rule_id": rule['id'],
-            "rule_name": rule['name'],
-            "total_imports_tested": len(imports),
-            "rule_matches": 0,
-            "accurate_predictions": 0,
-            "partial_matches": 0,
-            "mismatches": 0,
-            "accuracy_percentage": None,
-            "warning": None,
-            "details": []
-        }
-
-        # Test each import
-        for import_record in imports:
-            # Get description for reporting
-            description = import_record['raw_data'].get('Reference', '')
-
-            # Test if rule matches
-            rule_matched = rule_matcher.match_rule(import_record, rule)
-
-            if rule_matched:
-                results["rule_matches"] += 1
-
-                # Get bank account code (needed to filter bank posting from comparison)
-                try:
-                    bank_account_code = journal_engine.parse_source(import_record['source'])
-                except ValueError:
-                    bank_account_code = ""
-
-                # Simulate postings
-                simulated_postings = simulate_postings(rule)
-
-                # Load actual postings
-                actual_postings = load_actual_postings(conn, import_record['id'])
-
-                # Compare (three-tier)
-                comparison, mismatch_reason, warnings = compare_categorizations(
-                    simulated_postings,
-                    actual_postings,
-                    bank_account_code
-                )
-
-                if comparison == "match":
-                    results["accurate_predictions"] += 1
-                elif comparison == "match_with_warnings":
-                    results["partial_matches"] += 1
-                elif comparison == "mismatch":
-                    results["mismatches"] += 1
-
-                # Add to details
-                results["details"].append({
-                    "import_id": import_record['id'],
-                    "banking_date": import_record['banking_date'],
-                    "amount": import_record['amount'],
-                    "description": description,
-                    "rule_matched": True,
-                    "comparison": comparison,
-                    "simulated_postings": simulated_postings,
-                    "actual_postings": actual_postings,
-                    "mismatch_reason": mismatch_reason,
-                    "warnings": warnings
-                })
-            else:
-                # Rule didn't match - include actual postings for visibility
-                actual_postings = load_actual_postings(conn, import_record['id'])
-                results["details"].append({
-                    "import_id": import_record['id'],
-                    "banking_date": import_record['banking_date'],
-                    "amount": import_record['amount'],
-                    "description": description,
-                    "rule_matched": False,
-                    "comparison": None,
-                    "simulated_postings": None,
-                    "actual_postings": actual_postings,
-                    "mismatch_reason": None,
-                    "warnings": []
-                })
-
-        # Calculate accuracy percentage (partial matches count as accounts-correct)
-        if results["rule_matches"] > 0:
-            accounts_correct = results["accurate_predictions"] + results["partial_matches"]
-            results["accuracy_percentage"] = round(
-                (accounts_correct / results["rule_matches"]) * 100,
-                2
-            )
-        else:
-            results["accuracy_percentage"] = None
-            results["warning"] = "Rule did not match any transactions in the test set. Consider reviewing rule conditions or testing with a different date range."
 
         print(json.dumps(results, indent=2))
         sys.exit(0)
