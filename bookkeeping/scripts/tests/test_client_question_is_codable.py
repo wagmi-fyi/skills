@@ -2,7 +2,8 @@
 """
 Tests that a client question can be coded once it is answered. The engine
 refuses an import that already has a journal entry (processed=1). It accepts an
-unprocessed import (0) and a client question (2).
+unprocessed import (0) and a client question (2). The payment script's import
+lookup follows the same rule.
 
 Run:
     python3 -m unittest scripts.tests.test_client_question_is_codable
@@ -22,6 +23,7 @@ sys.path.insert(0, os.path.join(SCRIPTS_DIR, '_shared'))
 sys.path.insert(0, SCRIPTS_DIR)
 
 import journal_engine  # noqa: E402
+import apply_payment  # noqa: E402
 
 SCHEMA_PATH = os.path.join(
     os.path.dirname(SCRIPTS_DIR),  # bookkeeping/
@@ -116,6 +118,16 @@ class ClientQuestionCodableTests(unittest.TestCase):
         self.assertIn('already has a journal entry', str(cm.exception))
         count = self.conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0]
         self.assertEqual(count, 1)
+
+    def test_payment_lookup_accepts_client_question(self):
+        iid = add_import(self.conn, 2)
+        self.assertEqual(apply_payment.get_import_account_code(self.conn, iid), '1000')
+
+    def test_payment_lookup_refuses_import_with_entry(self):
+        iid = add_import(self.conn, 1)
+        with self.assertRaises(ValueError) as cm:
+            apply_payment.get_import_account_code(self.conn, iid)
+        self.assertIn('already has a journal entry', str(cm.exception))
 
 
 if __name__ == '__main__':
