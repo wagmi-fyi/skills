@@ -16,7 +16,7 @@ Work top-down; each step localizes the fault:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| AMA HTTP 401 | `AMA_FIRM_API_KEY` missing/wrong in `{local_dir}/adapters/.env`, or firm suspended | Check the key is present. A lost key cannot be recovered: `uv run --no-project --with-requirements requirements.txt adapters/ama_client.py signup --firm_name "{firm}" --replace`, from the skill directory, makes a new firm and saves its key. A suspended firm is for whoever runs the service |
+| AMA HTTP 401 | `AMA_FIRM_API_KEY` missing/wrong in `{local_dir}/adapters/.env`, or firm suspended | Check the key is present. A lost key cannot be recovered: `BOOKKEEPING_CONFIG_PATH={local_dir}/config.yaml uv run --no-project --with-requirements requirements.txt adapters/ama_client.py signup --firm_name "{firm}" --replace`, from the skill directory, makes a new firm and saves its key. A suspended firm is for whoever runs the service |
 | AMA HTTP 403 `provider_account_mismatch` | The Stripe keys belong to another account than the firm's first link used | Use the keys for the firm's own Stripe account, or sign up a new firm for the other account |
 | AMA HTTP 502 `provider_identify_failed` | The service could not read which Stripe account the key belongs to | Check in the Stripe Dashboard that the key is right and not revoked |
 | The client's link page shows no company name | The Stripe key lacks **Accounts: Read**, or it is a test key | Accounts: Read is recommended. With it, the firm is tied to its own Stripe account, and the client sees the company name Stripe verified. Links work without it |
