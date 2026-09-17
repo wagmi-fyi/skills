@@ -36,14 +36,13 @@ import tempfile
 import urllib.request
 import urllib.error
 
-# Load config to find local_dir for .env
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts', '_shared'))
 import config_loader
-_config = config_loader.load_config()
-ENV_PATH = os.path.join(_config['local_dir'], 'adapters', '.env')
 
 from dotenv import load_dotenv
-load_dotenv(ENV_PATH)
+
+# Filled by load_settings() when main() starts.
+_config = {}
 
 DEFAULT_API_URL = "https://auth-my-accountant.vercel.app"
 
@@ -69,6 +68,8 @@ SIGNUP_MESSAGES = {
     'lost': "The firm was made, but its key could not be saved to {path}: {reason}. "
             "The key is gone. Run signup again.",
 }
+
+NO_CONFIG = "Cannot read the client config: {reason}. Nothing was sent."
 
 KEY_NAME = 'AMA_FIRM_API_KEY'
 
@@ -144,6 +145,17 @@ def require_env(names):
         }))
         sys.exit(1)
     return values
+
+
+def settings_path():
+    """The adapter settings file, {local_dir}/adapters/.env."""
+    return os.path.join(_config['local_dir'], 'adapters', '.env')
+
+
+def load_settings():
+    """Read the client config, then the settings file beside it."""
+    _config.update(config_loader.load_config())
+    load_dotenv(settings_path())
 
 
 # =============================================================================
@@ -374,7 +386,7 @@ def refusal_message(status, body, headers):
 
 def cmd_signup(args, api_url, env_path=None):
     """Sign up a firm and save its key. The key is never printed."""
-    env_path = env_path or ENV_PATH
+    env_path = env_path or settings_path()
     firm_name = (args.firm_name or _config.get('firm_name') or '').strip()
     if not firm_name:
         fail(SIGNUP_MESSAGES['no_name'])
@@ -436,6 +448,10 @@ def cmd_signup(args, api_url, env_path=None):
 def main():
     try:
         args = parse_arguments()
+        try:
+            load_settings()
+        except FileNotFoundError as e:
+            fail(NO_CONFIG.format(reason=str(e).rstrip('.')))
         api_url = (os.getenv('AMA_API_URL') or DEFAULT_API_URL).rstrip('/')
 
         if args.command == 'create-bundle':
