@@ -17,12 +17,15 @@ The three words auto, confirm and pin come from a file named UPDATE in the
 skill's directory. It holds one of them. No UPDATE file means auto.
 
 The time of the last check and the stamp it saw are kept in .update-check in
-the skill's directory. Delete that file to check again at once.
+the skill's directory. When that directory is not writable, they are kept in
+skill-update-check/<skill directory name> under $XDG_CACHE_HOME, or under
+~/.cache when that is unset. Delete that file to check again at once.
 
 Exit 0 in every case but one: a malformed stamp in this SKILL.md exits 2.
 """
 import argparse
 import datetime
+import os
 import pathlib
 import re
 import sys
@@ -63,6 +66,15 @@ def front_matter(text):
     return name, stamp
 
 
+def cache_path(skill):
+    """Return the file that keeps the last check for this skill."""
+    skill = skill.resolve()
+    if os.access(skill, os.W_OK):
+        return skill / ".update-check"
+    base = os.environ.get("XDG_CACHE_HOME") or pathlib.Path.home() / ".cache"
+    return pathlib.Path(base) / "skill-update-check" / skill.name
+
+
 def read_cache(path):
     """Return the time of the last check, or None."""
     try:
@@ -75,6 +87,7 @@ def read_cache(path):
 
 def write_cache(path, now, seen):
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"checked {now.isoformat(timespec='seconds')}\nseen {seen}\n")
     except OSError:
         pass
@@ -99,7 +112,7 @@ def check(skill, base, now):
         return "source tree, no check"
     if not name or not NAME.match(name):
         raise Malformed(f"malformed name: {name}")
-    cache = skill / ".update-check"
+    cache = cache_path(skill)
     last = read_cache(cache)
     if last is not None and datetime.timedelta(0) <= now - last < DAY:
         return f"checked {last.isoformat(timespec='seconds')}"
