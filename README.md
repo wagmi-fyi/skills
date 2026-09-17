@@ -157,8 +157,9 @@ install path.
 ## Bank feeds
 
 `bookkeeping` pulls bank feeds through a broker service. The default endpoint is
-`https://auth-my-accountant.vercel.app`, which WAGMI operates. Requests to it carry an
-`AMA_FIRM_API_KEY` that WAGMI issues, so no data reaches that service without a key we handed you.
+`https://auth-my-accountant.vercel.app`, which WAGMI operates. Requests to it carry a firm key,
+`AMA_FIRM_API_KEY`, and no data reaches that service without one. The adapter's `signup` command
+makes a firm on the service and saves its key.
 Set `AMA_API_URL` to send the adapter somewhere else.
 
 ## Licensing

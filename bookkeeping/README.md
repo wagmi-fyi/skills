@@ -33,7 +33,7 @@ Auth My Accountant, another open-source WAGMI project, helps your agent set up s
 
 The skill's agent calls the service and gets back a link. You send that link to the client. They open it, pick their bank, and sign in through Stripe, on the bank's own site where the bank supports that. What returns to the skill is a list of account IDs with display details: institution name, last four digits, account type. Nobody on the firm's side sees the client's bank username or password. The Stripe keys the skill passes in open one session and are not stored. Transactions and balances never pass through the service; the skill pulls those from Stripe directly, which is the Stripe row above.
 
-A firm key comes from an operator rather than self-service, and the deeper troubleshooting steps in `reference/bank-feeds-troubleshooting.md` route to that operator. The rest of the skill works with no bank feeds at all.
+A firm key comes from one command, `adapters/ama_client.py signup`, which makes the firm on the service and saves its key for the adapter. The service keeps only a hash of the key, so a lost key means signing up again. The rest of the skill works with no bank feeds at all.
 
 ## Agent install
 
