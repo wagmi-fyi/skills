@@ -14,6 +14,7 @@ output_folder: "{project-root}/_bk-output"
 # Firm context (optional — omit or leave empty for solo deployments)
 firm_root: ""              # e.g., "~/.claude/bookkeeping-firm"
 firm_id: ""                # e.g., "example-accounting"
+firm_name: ""              # e.g., "Example Accounting"; signup and client links use it
 
 # Database (Staging Layer Design)
 # Domain-specific database: bookkeeping.db contains all bookkeeping tables
