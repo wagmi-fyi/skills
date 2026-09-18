@@ -3,7 +3,7 @@ name: bookkeeping
 license: Apache-2.0
 description: "AI-native bookkeeping: ingest, categorize, reconcile, and publish financial data with intent-based operations and principles-based quality. Use when processing bank transactions, categorizing expenses, managing trade accounts, running period closes, or onboarding new bookkeeping clients."
 metadata:
-  version: "2868614 2026-09-17"
+  version: "05f39c5 2026-09-18"
 ---
 
 # Bookkeeping
@@ -19,7 +19,7 @@ AI-native bookkeeping with dynamic, intent-based operations. The agent reasons a
 When this skill is invoked:
 
 1. **Load config** from `{local_dir}/config.yaml`
-   - Resolve via `BOOKKEEPING_CONFIG_PATH` environment variable, or default to `{project-root}/_local-bookkeeping/config.yaml`
+   - Resolve via the `BOOKKEEPING_CONFIG_PATH` environment variable, set to `{project-root}/_local-bookkeeping/config.yaml`. Scripts have no default and stop without it.
    - **Resolve all path placeholders to absolute paths before using them.** Config values reference each other in a chain — resolve fully:
      1. `{project-root}` → the actual working directory
      2. `{local_dir}` → resolve `{project-root}` placeholder

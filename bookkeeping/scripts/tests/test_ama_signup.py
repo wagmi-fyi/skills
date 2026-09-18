@@ -17,6 +17,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,18 +26,6 @@ from unittest import mock
 
 SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL_DIR = os.path.dirname(SCRIPTS_DIR)
-
-# The adapter loads config at import time, so point it at a throwaway config.
-_tmpdir = tempfile.mkdtemp(prefix='ama-signup-test-')
-_local_dir = os.path.join(_tmpdir, '_local-bookkeeping')
-os.makedirs(_local_dir, exist_ok=True)
-with open(os.path.join(_local_dir, 'config.yaml'), 'w') as f:
-    f.write(
-        'local_dir: "{project-root}/_local-bookkeeping"\n'
-        'database_dir: "{project-root}/database"\n'
-        'database_name: "bookkeeping.db"\n'
-    )
-os.environ['BOOKKEEPING_CONFIG_PATH'] = os.path.join(_local_dir, 'config.yaml')
 
 _spec = importlib.util.spec_from_file_location(
     "ama_client", os.path.join(SKILL_DIR, 'adapters', 'ama_client.py'))
@@ -223,6 +212,64 @@ class SignupTest(unittest.TestCase):
                                                   response=ok_response('Config Firm'))
         self.assertEqual(code, 0)
         request.assert_called_once_with(API_URL, 'Config Firm')
+
+
+class CommandLineTest(unittest.TestCase):
+    """The command as a person types it, with and without a client config."""
+
+    def setUp(self):
+        self.project = tempfile.mkdtemp(prefix='ama-signup-project-')
+        local_dir = os.path.join(self.project, '_local-bookkeeping')
+        os.makedirs(local_dir)
+        self.config_path = os.path.join(local_dir, 'config.yaml')
+        with open(self.config_path, 'w') as f:
+            f.write('local_dir: "{project-root}/_local-bookkeeping"\n')
+        self.env_path = os.path.join(local_dir, 'adapters', '.env')
+
+    def tearDown(self):
+        ama_client._config.clear()
+
+    def test_missing_config_answers_in_json(self):
+        env = {k: v for k, v in os.environ.items() if k != 'BOOKKEEPING_CONFIG_PATH'}
+        result = subprocess.run(
+            [sys.executable, os.path.join(SKILL_DIR, 'adapters', 'ama_client.py'),
+             'signup', '--firm_name', 'Acme Accounting'],
+            env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, '')
+        self.assertEqual(json.loads(result.stdout), {
+            'success': False,
+            'error': 'Cannot read the client config: BOOKKEEPING_CONFIG_PATH not set. '
+                     "Set it to your project's _local-bookkeeping/config.yaml. "
+                     'Nothing was sent.'})
+
+    def test_config_path_that_does_not_exist(self):
+        missing = os.path.join(self.project, 'nowhere', 'config.yaml')
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {'BOOKKEEPING_CONFIG_PATH': missing}), \
+                mock.patch.object(sys, 'argv', ['ama_client.py', 'signup']), \
+                contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit) as caught:
+                ama_client.main()
+        self.assertEqual(caught.exception.code, 1)
+        self.assertEqual(json.loads(out.getvalue())['error'],
+                         f'Cannot read the client config: Config not found at: {missing}. '
+                         'Nothing was sent.')
+
+    def test_signup_saves_beside_the_config(self):
+        request = mock.Mock(return_value=ok_response())
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {'BOOKKEEPING_CONFIG_PATH': self.config_path,
+                                          'AMA_API_URL': API_URL}), \
+                mock.patch.object(sys, 'argv', ['ama_client.py', 'signup',
+                                                '--firm_name', 'Acme Accounting']), \
+                mock.patch.object(ama_client, 'signup_request', request), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            ama_client.main()
+        request.assert_called_once_with(API_URL, 'Acme Accounting')
+        self.assertEqual(json.loads(out.getvalue())['saved_to'], self.env_path)
+        with open(self.env_path) as f:
+            self.assertEqual(f.read(), f'AMA_FIRM_API_KEY={KEY}\n')
 
 
 if __name__ == '__main__':
