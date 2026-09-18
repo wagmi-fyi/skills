@@ -68,10 +68,9 @@ Before you install anything:
 4. Set up my first client: copy templates/config-template.yaml into a
    _local-bookkeeping/ folder in my project, fill in the paths, and ask me
    which system of record my books publish to. Then ask me for any
-   credentials the adapters I chose need. The adapters read them from the
-   environment or from _local-bookkeeping/adapters/.env, and the Auth My
-   Accountant signup writes its firm key to that file. Nothing goes in
-   git. Never ask me to paste a secret into our conversation.
+   credentials the adapters I chose need, and put them where this machine
+   keeps secrets rather than in a file. Nothing goes in git. Never ask me
+   to paste a secret into our conversation.
 
 Stop and tell me if anything looks wrong, or if it needs something I
 don't have.
@@ -79,7 +78,7 @@ don't have.
 
 ## Manual install
 
-Clone the repository, copy the `bookkeeping` folder into whichever skills directory your agent reads, and add `qbo` beside it if you need QuickBooks. Install the pins from `requirements.txt` for the adapters you actually use. Copy `templates/config-template.yaml` to `_local-bookkeeping/config.yaml` in your project and fill in the paths and the system of record. Adapter credentials come from the environment or from `_local-bookkeeping/adapters/.env`. `SKILL.md` covers the config chain in full.
+Clone the repository, copy the `bookkeeping` folder into whichever skills directory your agent reads, and add `qbo` beside it if you need QuickBooks. Install the pins from `requirements.txt` for the adapters you actually use. Copy `templates/config-template.yaml` to `_local-bookkeeping/config.yaml` in your project and fill in the paths and the system of record. Adapter credentials come from the environment. `SKILL.md` covers the config chain in full.
 
 ## First run
 
