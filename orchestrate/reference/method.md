@@ -31,6 +31,8 @@ How an orchestration is *run*. Durable and domain-agnostic. Project specifics li
 
 - **Skill & doc edits follow the target's own guidelines — search for them first.** When a unit **creates or updates a skill** (core or shipped) **or runtime documentation**, the session first searches the target tree for its authoring conventions — an AUTHORING/CONTRIBUTING/style doc, the skill's own philosophy/patterns references, the release runbook, and the precedent of the last shipped change — and **conforms to what it finds**, citing the conformance in its report. Where no written guideline exists, that absence is itself a **finding to report** (a candidate for the project register), never a license to invent a private convention. Charter-side corollary: a prompt for such a unit **names the known guideline surfaces**, and the unit's gate includes the conformance check.
 
+- **Read the target skill before you charter work against it.** Read its entry file and every file it marks as a precondition for the operation you charter. A delegate treats its charter as its most specific instruction. A skill rule the charter's author did not read gets overridden, and no check in the run reports it. Where a charter departs from the skill on purpose, it says what it does differently and why.
+
 > These principles are the **default postures** every run inherits. A run also accrues **run-specific postures** it holds in its workpaper (Standing Postures). A compaction silently resets *both* — so `resume` re-asserts them before acting, and `checkpoint` (run before the human compacts) is where a run-specific posture proven general gets promoted up into this list. See `operations/checkpoint.md`.
 
 ## The prompt contract (every delegated prompt carries all five)
