@@ -13,14 +13,18 @@ Run:
     python3 -m unittest scripts.tests.test_qbo_publish_consumed_credits
 """
 
+import importlib.util
+import io
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
 import types
 import unittest
 import uuid
+from contextlib import redirect_stdout
 from unittest import mock
 
 # The QBO SDK is adapter-tier (requirements.txt, QBO block) and reaches this
@@ -66,6 +70,17 @@ def _load_modules():
     from _shared import common as _common
     from _publishers import payments as _payments
     common, payments_pub = _common, _payments
+
+
+def _drop_adapter_modules():
+    """Forget the qbo adapter packages so the next importer gets its own. The stub
+    _load_modules installs for `_shared.client` must not reach publish.py."""
+    global common, payments_pub
+    for m in [k for k in list(sys.modules) if k == '_shared' or k.startswith('_shared.')
+              or k == '_publishers' or k.startswith('_publishers.')
+              or k == 'publish_under_test']:
+        del sys.modules[m]
+    common = payments_pub = None
 
 
 class _FakeRL:
@@ -401,6 +416,84 @@ class BankFundedGapTests(unittest.TestCase):
                               (json.dumps({"status": "synced", "external_id": "PMT-1"}), tap_id))
         self.conn.commit()
         self.assertEqual(self._gaps(), [])
+
+
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
+class DryRunStopTests(unittest.TestCase):
+    """The dry run is where a bookkeeper looks before publishing, so the gap has to
+    fail it. publish.py is loaded with a scratch config; no credentials, no network."""
+
+    CONFIG = """\
+local_dir: "{project-root}/_local-bookkeeping"
+database_dir: "%s"
+database_name: "%s"
+"""
+
+    PLACEHOLDERS = {
+        'QBO_CLIENT_ID': 'placeholder-id',
+        'QBO_CLIENT_SECRET': 'placeholder-secret',
+        'QBO_ACCESS_TOKEN': 'placeholder-access',
+        'QBO_REFRESH_TOKEN': 'placeholder-refresh',
+        'QBO_REALM_ID': '4620816365000000000',
+        'QBO_ENVIRONMENT': 'sandbox',
+    }
+
+    def setUp(self):
+        # publish.py needs the REAL _shared.client, so drop the stub the other classes
+        # install and let it load against placeholder credentials.
+        _drop_adapter_modules()
+        self.addCleanup(_drop_adapter_modules)
+        self.conn, self.path = make_temp_db()
+        self.addCleanup(self.conn.close)
+        self.addCleanup(os.remove, self.path)
+        self.root = tempfile.mkdtemp(prefix='consumed-credit-dry-run-')
+        self.addCleanup(shutil.rmtree, self.root)
+        self.config = os.path.join(self.root, 'config.yaml')
+        config = self.config
+        with open(config, 'w') as f:
+            f.write(self.CONFIG % (os.path.dirname(self.path), os.path.basename(self.path)))
+        publish_py = os.path.join(SKILL_DIR, 'adapters', 'qbo', 'publish.py')
+        spec = importlib.util.spec_from_file_location('publish_under_test', publish_py)
+        self.publish = importlib.util.module_from_spec(spec)
+        env = dict(self.PLACEHOLDERS, BOOKKEEPING_CONFIG_PATH=config)
+        with mock.patch.dict(os.environ, env), mock.patch.object(sys, 'path', list(sys.path)):
+            spec.loader.exec_module(self.publish)
+
+    def _dry_run(self):
+        """Run publish.py --dry_run --publish_type payments. Credentials are refused, so
+        no client is built and the OAuth check stays out of the verdict."""
+        argv = ['publish.py', '--dry_run', '--publish_type', 'payments']
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {'BOOKKEEPING_CONFIG_PATH': self.config}), \
+                mock.patch.object(sys, 'argv', argv), \
+                mock.patch.object(self.publish, 'validate_qbo_env_vars',
+                                  side_effect=ValueError('no credentials in this test')), \
+                redirect_stdout(out):
+            with self.assertRaises(SystemExit) as exit_ctx:
+                self.publish.main()
+        return exit_ctx.exception.code, json.loads(out.getvalue())
+
+    def test_a_deposit_every_phase_can_post_passes_the_dry_run(self):
+        build_deposit(self.conn, {})
+        self.conn.commit()
+        code, result = self._dry_run()
+        self.assertEqual(code, 0, result)
+        self.assertTrue(result['success'])
+        self.assertEqual(result['validation']['bank_funded_payment_gaps'], [])
+        self.assertEqual(result['validation']['payout_consumed_credit_count'], 1)
+
+    def test_a_row_no_phase_can_post_fails_the_dry_run(self):
+        import_id = insert_import(self.conn, 25000)
+        vc_ta = insert_ta(self.conn, 'vendor_credit', 25000, 'VC-1', {},
+                          contact='Dockside Freight')
+        tap_id = insert_tap(self.conn, vc_ta, 25000, import_id=import_id)
+        self.conn.commit()
+
+        code, result = self._dry_run()
+        self.assertEqual(code, 1)
+        self.assertFalse(result['success'])
+        self.assertIn({'payment_id': tap_id, 'error_code': 'PAYMENT_MATCHES_NO_PHASE',
+                       'error_message': mock.ANY}, result['errors'])
 
 
 if __name__ == '__main__':
