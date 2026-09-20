@@ -48,21 +48,21 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   because its invoice payments already carry cash net of the credit.
 
 - **A bank-funded payment row no phase can post whole stops the run before anything posts.**
-  `find_bank_funded_payment_gaps` names the row by id, in the dry run and in the live run. It asks two
-  questions. Is every bank-funded row claimed by a phase? `PAYMENT_MATCHES_NO_PHASE` says no, and a
-  bank-funded vendor credit is the case to expect. `DEPOSIT_GROUP_SPLIT` says a deposit keyed on its
-  import shares a bank line and a contact with a row that no consumed-credit group holds, so the credit
-  and the invoices it reduces would group apart and those invoices would post at full face. Two whole
-  deposits on one bank line are not a split, and neither is a payable or another customer's row. Can
-  every deposit
-  become one Payment? That is `check_consumed_credit_group`, which the consumed-credit phase calls
-  too, so a clean gate is never followed by the phase writing rows to error: a credit memo with no
-  invoice of its own, a deposit a prior run part-published, two customers or two dates in one group,
-  a credit worth more than the invoices.
+  `find_bank_funded_payment_gaps` names the row by id, in the dry run and in the live run. The check
+  does two things. It tests that every bank-funded row is claimed by a phase.
+  `PAYMENT_MATCHES_NO_PHASE` is a row no selection reads, and a bank-funded vendor credit is the case
+  to expect. `DEPOSIT_GROUP_SPLIT` is a deposit keyed on its import that shares a bank line and a
+  contact with a row no consumed-credit group holds, so the credit and the invoices it reduces would
+  group apart and those invoices would post at full face. Two whole deposits on one bank line pass. A
+  payable on that line passes, and so does another customer's row. The check also tests that every
+  deposit can become one Payment. That part is `check_consumed_credit_group`, which the
+  consumed-credit phase calls too, so a clean gate is never followed by the phase writing rows to
+  error: a credit memo with no invoice of its own, a deposit a prior run part-published, two customers
+  or two dates in one group, a credit worth more than the invoices.
 
   The stop holds back the bank-funded payment phases and nothing else. Journal entries,
-  invoices, bills and the credit documents publish as usual, so the next run is no larger than
-  it has to be, and the run reports `success: false` with every gap in `errors`.
+  invoices, bills and the credit documents publish as usual, and the run reports
+  `success: false` with every gap in `errors`.
 
   Most gaps are a metadata fix: give the credit memo and the invoices it reduces the same
   contact and the same key, then run again. A row no metadata change can route, a bank-funded
