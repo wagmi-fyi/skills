@@ -44,7 +44,6 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   is `deposit_group_key` in `_shared/common.py`: the parent's `payout_id` where a batching channel stamps
   one, the payment's `import_id` otherwise, since a plain ACH or wire deposit is one import. A settlement
   keeps its own path, because its invoice payments already carry cash net of the credit.
-  `CustomerRef` and `DepositToAccountRef` are required on the Line update even though it is sparse.
 
 - **A bank-funded payment row no phase can post whole stops the run before anything posts.**
   `find_bank_funded_payment_gaps` names the row by id, in the dry run and in the live run. It asks two
@@ -66,6 +65,21 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   vendor credit being the case to expect, has no remedy in the skill today. Publish the rest
   by naming a narrower `--publish_type`, and raise the row: it needs a publish phase that does
   not exist yet.
+
+- **A book whose invoices already posted at full face shows one credit memo in
+  `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit,
+  the CreditMemo floats with `RemainingCredit` equal to its face, and the credit memo's payment
+  row is still pending. The publisher cannot net a deposit whose invoices are already posted,
+  so it refuses the group and the dry run names it. Repair it by hand with the recipe below,
+  then the period ties and later deposits publish whole on their own.
+
+- **Netting a credit into a Payment that already posted.** One sparse update on ONE of the
+  deposit's QBO Payments: `TotalAmt = ΣR − ΣCM`, `Line = [Invoice LinkedTxn(face), CreditMemo
+  LinkedTxn(face)]`. `CustomerRef` and `DepositToAccountRef` are both required on that update
+  even though neither changes. The invoice stays at Balance 0, the bank drops by ΣCM, and the
+  CreditMemo goes to Balance 0. Then set the local credit-memo payment row to `sync=ignore`, so
+  no later run tries to publish it again. This is the answer to
+  `PAYOUT_PARTIALLY_PUBLISHED`, whose message asks for manual reconciliation.
 
 ## Errors that lie
 
