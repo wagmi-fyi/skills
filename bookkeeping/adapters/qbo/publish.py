@@ -184,10 +184,10 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
         result['bill_payment_count'] = len(pay_pmts)
         result['owner_cleared_count'] = len(
             query_owner_cleared_payments(conn, sync_status, start_date, end_date))
-        # Consolidated payout-consumed-credit Payments (one per payout that consumes a CM
-        # within the payout — the bank-funded CM-consume fix). Count = distinct payouts.
+        # Consolidated consumed-credit Payments (one per deposit that consumes a CM inside
+        # itself). Count = distinct deposits.
         pcc_rows = query_payout_consumed_credits(conn, sync_status)
-        result['payout_consumed_credit_count'] = len({r['payout_id'] for r in pcc_rows})
+        result['payout_consumed_credit_count'] = len({r['group_key'] for r in pcc_rows})
 
         for row in recv_pmts + pay_pmts:
             if not row.get('ta_external_id'):

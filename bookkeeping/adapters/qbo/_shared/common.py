@@ -120,6 +120,24 @@ def publish_single_qbo_object(client, rate_limiter, qbo_obj, env_path: str) -> T
 # Trade Account Queries
 # =============================================================================
 
+def deposit_group_key(ta_alias: str, tap_alias: str) -> str:
+    """SQL for the key that names one deposit, given a parent-TA and TAP alias.
+
+    One bank line can settle several documents at once. A channel that pays out in
+    batches stamps a payout_id on the parent trade account, and that id names the
+    deposit. A plain ACH or wire deposit carries no channel key, and there the import
+    is the deposit: an imports row is one bank line, so its id names the group. A
+    payout id wins where both exist, because an import can span more than one payout
+    and a deposit with no payout id spans none.
+
+    Two sites read this key — the selection in query_payout_consumed_credits and the
+    disjointness exclusion in query_trade_account_payments — and their row sets must
+    stay identical, so both build their SQL from here and cannot drift apart.
+    """
+    return (f"COALESCE(json_extract({ta_alias}.metadata, '$.payout_id'), "
+            f"'import:' || {tap_alias}.import_id)")
+
+
 def query_trade_accounts(
     conn: sqlite3.Connection,
     sync_status: str,
@@ -218,21 +236,21 @@ def query_trade_account_payments(
         "json_extract(tap.sync, '$.status') = ?",
         "json_extract(tap.sync, '$.external_id') IS NULL",
         "tap.source_ta_id IS NULL",  # bank-funded only; credit applications go through credit_applications publisher
-        # Disjointness: exclude bank-funded receivable TAPs that belong to a payout which
-        # consumes a CreditMemo *within* the payout (a bank-funded CM-consume TAP — parent
-        # type=credit_memo, source_ta_id NULL, import_id set, no settlement_id). Those publish
-        # as ONE consolidated mixed-Line Payment NET of the CM via
+        # Disjointness: exclude bank-funded receivable TAPs that belong to a deposit which
+        # consumes a CreditMemo *inside* the deposit (a bank-funded CM-consume TAP — parent
+        # type=credit_memo, source_ta_id NULL, import_id set). Those publish as ONE
+        # consolidated mixed-Line Payment NET of the CM via
         # _publishers/payments.publish_payout_consumed_credits — NOT as gross singletons here.
-        # No-op for any payout without such a TAP. Group key = payout_id.
-        """NOT EXISTS (
+        # No-op for any deposit without such a TAP. The key comes from deposit_group_key(),
+        # the same expression query_payout_consumed_credits selects on.
+        f"""NOT EXISTS (
             SELECT 1 FROM trade_account_payments cmtap
             JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
             WHERE cmta.type = 'credit_memo'
               AND cmtap.source_ta_id IS NULL
               AND cmtap.import_id IS NOT NULL
               AND cmta.voided_at IS NULL
-              AND json_extract(cmta.metadata, '$.payout_id') IS NOT NULL
-              AND json_extract(cmta.metadata, '$.payout_id') = json_extract(ta.metadata, '$.payout_id')
+              AND {deposit_group_key('cmta', 'cmtap')} = {deposit_group_key('ta', 'tap')}
               AND json_extract(cmtap.sync, '$.status') = ?
               AND json_extract(cmtap.sync, '$.external_id') IS NULL
         )""",
@@ -413,23 +431,23 @@ def query_payout_consumed_credits(
     conn: sqlite3.Connection,
     sync_status: str,
 ) -> List[Dict]:
-    """Fetch bank-funded TAPs for payouts that consume a CreditMemo *within* the payout.
+    """Fetch bank-funded TAPs for deposits that consume a CreditMemo *inside* the deposit.
 
-    A payout-keyed channel (e.g. Shopify)
-    can settle a chargeback/return CreditMemo inside the payout deposit. The credit arrives
-    as a **bank-funded CM-consume TAP** — parent trade_account type='credit_memo',
-    source_ta_id NULL, import_id set — carrying NO settlement_id (the channel groups by
-    payout_id, stored on the parent TA's metadata, not the TAP). Such a TAP matches no other
-    publish phase (query_trade_account_payments filters parent type receivable/payable;
+    A customer can pay part of an invoice with a credit memo, and a batching channel
+    (e.g. Shopify) can settle a chargeback or return inside a payout. Either way the bank
+    receives the net and the credit arrives as a **bank-funded CM-consume TAP** — parent
+    trade_account type='credit_memo', source_ta_id NULL, import_id set. Such a TAP matches no
+    other publish phase (query_trade_account_payments filters parent type receivable/payable;
     query_credit_applications needs source_ta_id; query_owner_cleared_payments needs
     import_id NULL; query_settlement_credit_apps needs application_method='settlement_payment'),
-    so it sits pending forever while the payout's invoice Payments post GROSS and the CM floats.
+    so on its own it sits pending forever while the deposit's invoice Payments post GROSS and
+    the CM floats.
 
-    Returns ALL bank-funded TAPs (parent receivable + credit_memo) for every payout_id that
-    contains >=1 such CM-consume TAP, so payments.publish_payout_consumed_credits can emit ONE
-    consolidated mixed-Line Payment per payout: TotalAmt = SUM(gross R) - SUM(CM), Lines =
+    Returns ALL bank-funded TAPs (parent receivable + credit_memo) for every deposit that
+    holds >=1 such CM-consume TAP, so payments.publish_payout_consumed_credits can emit ONE
+    consolidated mixed-Line Payment per deposit: TotalAmt = SUM(gross R) - SUM(CM), Lines =
     N Invoice (at gross face) + M CreditMemo. **The R-TAPs here are GROSS (full invoice face)**;
-    the CM is not pre-attributed to any invoice — it nets the cash at the payout level, so the
+    the CM is not pre-attributed to any invoice — it nets the cash at the deposit level, so the
     deposit = SUM R - SUM CM. (This differs from query_settlement_credit_apps, where the R-TAPs
     are already net-of-CM cash and the credit is a separate settlement_payment credit-app TAP.)
 
@@ -437,12 +455,15 @@ def query_payout_consumed_credits(
     ta_external_id is the parent's QBO id (Invoice id for 'invoice', CreditMemo id for 'credit');
     a NULL signals an unsynced parent -> the publisher pre-flight fails loud.
 
-    Group key = parent-TA **payout_id**, NOT import_id (an import can span >1 payout). Scoped by
-    sync_status only (not date): the row set must stay identical to the query_trade_account_payments
-    disjointness exclusion above, so no TAP is ever both consolidated here and posted as a singleton.
+    Group key = deposit_group_key(), returned as 'group_key'. Scoped by sync_status only
+    (not date): the row set must stay identical to the query_trade_account_payments
+    disjointness exclusion above, so no TAP is ever both consolidated here and posted as a
+    singleton.
     """
     cursor = conn.cursor()
-    query = """
+    key = deposit_group_key('ta', 'tap')
+    cm_key = deposit_group_key('cmta', 'cmtap')
+    query = f"""
         SELECT
             tap.id AS tap_id,
             tap.amount,
@@ -451,7 +472,7 @@ def query_payout_consumed_credits(
             ta.type AS parent_type,
             CASE ta.type WHEN 'credit_memo' THEN 'credit' ELSE 'invoice' END AS role,
             ta.contact AS ta_contact,
-            json_extract(ta.metadata, '$.payout_id') AS payout_id,
+            {key} AS group_key,
             json_extract(ta.sync, '$.external_id') AS ta_external_id,
             c.remote_id AS contact_remote_id,
             coa.remote_id AS payment_account_remote_id
@@ -465,20 +486,18 @@ def query_payout_consumed_credits(
           AND ta.voided_at IS NULL
           AND json_extract(tap.sync, '$.status') = ?
           AND json_extract(tap.sync, '$.external_id') IS NULL
-          AND json_extract(ta.metadata, '$.payout_id') IS NOT NULL
-          AND json_extract(ta.metadata, '$.payout_id') IN (
-                SELECT json_extract(cmta.metadata, '$.payout_id')
+          AND {key} IN (
+                SELECT {cm_key}
                 FROM trade_account_payments cmtap
                 JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
                 WHERE cmta.type = 'credit_memo'
                   AND cmtap.source_ta_id IS NULL
                   AND cmtap.import_id IS NOT NULL
                   AND cmta.voided_at IS NULL
-                  AND json_extract(cmta.metadata, '$.payout_id') IS NOT NULL
                   AND json_extract(cmtap.sync, '$.status') = ?
                   AND json_extract(cmtap.sync, '$.external_id') IS NULL
           )
-        ORDER BY payout_id, role, tap.id
+        ORDER BY group_key, role, tap.id
     """
     cursor.execute(query, (sync_status, sync_status))
     return [dict(row) for row in cursor.fetchall()]
