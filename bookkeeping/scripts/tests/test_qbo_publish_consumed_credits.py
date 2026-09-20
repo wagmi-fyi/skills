@@ -609,10 +609,10 @@ database_name: "%s"
         with mock.patch.dict(os.environ, env), mock.patch.object(sys, 'path', list(sys.path)):
             spec.loader.exec_module(self.publish)
 
-    def _dry_run(self):
-        """Run publish.py --dry_run --publish_type payments. Credentials are refused, so
-        no client is built and the OAuth check stays out of the verdict."""
-        argv = ['publish.py', '--dry_run', '--publish_type', 'payments']
+    def _dry_run(self, publish_type='payments'):
+        """Run publish.py --dry_run. Credentials are refused, so no client is built and the
+        OAuth check stays out of the verdict."""
+        argv = ['publish.py', '--dry_run', '--publish_type', publish_type]
         out = io.StringIO()
         with mock.patch.dict(os.environ, {'BOOKKEEPING_CONFIG_PATH': self.config}), \
                 mock.patch.object(sys, 'argv', argv), \
@@ -645,6 +645,19 @@ database_name: "%s"
         self.assertIn({'payment_id': tap_id, 'error_code': 'PAYMENT_MATCHES_NO_PHASE',
                        'error_message': mock.ANY}, result['errors'])
 
+
+    def test_owner_cleared_alone_does_not_gate_on_bank_funded_rows(self):
+        """The owner-cleared phase touches no bank-funded row, so it must not be stopped by
+        one, in the dry run or the live run."""
+        import_id = insert_import(self.conn, 25000)
+        vc_ta = insert_ta(self.conn, 'vendor_credit', 25000, 'VC-1', {},
+                          contact='Dockside Freight')
+        insert_tap(self.conn, vc_ta, 25000, import_id=import_id)
+        self.conn.commit()
+
+        code, result = self._dry_run(publish_type='owner_cleared')
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result['validation']['bank_funded_payment_gaps'], [])
 
     def _live_run(self):
         """Run publish.py with no --dry_run. The client is a stand-in and the database holds

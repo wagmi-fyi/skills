@@ -190,10 +190,6 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
         # itself). Count = distinct deposits.
         pcc_rows = query_payout_consumed_credits(conn, sync_status)
         result['payout_consumed_credit_count'] = len({r['group_key'] for r in pcc_rows})
-        # Every bank-funded payment row must be claimed by a phase, and a deposit must be
-        # posted whole. A gap here is a wrong number waiting to happen, so it fails the run.
-        result['bank_funded_payment_gaps'] = find_bank_funded_payment_gaps(
-            conn, sync_status, start_date, end_date)
 
         for row in recv_pmts + pay_pmts:
             if not row.get('ta_external_id'):
@@ -201,6 +197,14 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
                     'payment_id': row['tap_id'], 'trade_account_id': row['trade_account_id'],
                     'warning': 'Parent trade account not synced yet'
                 })
+
+    # Every bank-funded payment row must be claimed by a phase, and a deposit must be
+    # posted whole. A gap here is a wrong number waiting to happen, so it fails the run.
+    # The same publish types the live run checks, so a dry run cannot pass where the live
+    # run would hold back, or the other way about.
+    if publish_type in ('all', 'payments'):
+        result['bank_funded_payment_gaps'] = find_bank_funded_payment_gaps(
+            conn, sync_status, start_date, end_date)
 
     return result
 
