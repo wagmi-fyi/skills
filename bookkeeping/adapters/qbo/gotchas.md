@@ -36,18 +36,22 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   final state would be valid. Build the complete line set and save once. (Publisher fix tracked in
   the relevant client's publisher-gaps notes.)
 
-- **`--allow_mixed_credit` settlements net the CM only for `settlement_id`-keyed channels; `payout_id`
-  channels (Shopify) silently skip it.** The consolidated mixed-payment path (`query_settlement_credit_apps`
-  in `_publishers/payments.py`) pulls the CM-consume TAP by `metadata.settlement_id`. A payout_id-keyed
-  channel has no settlement_id → the bank-funded CM-consume TAP (parent type=`credit_memo`, `import_id` set)
-  matches no publisher phase → left `pending`; the invoice Payments then post at FULL face (over-depositing
-  the bank by ΣCM) and the CreditMemo publishes but FLOATS unapplied (`RemainingCredit` = ΣCM). Symptom: one
-  stubborn pending TAP whose parent is a credit_memo + a floating CM + bank over by exactly the CM total.
-  Manual remediation: net the CM into ONE of the settlement's QBO Payments via a sparse update —
-  `TotalAmt = ΣR − ΣCM`, `Line = [Invoice LinkedTxn(face), CreditMemo LinkedTxn(face)]` (CustomerRef AND
-  DepositToAccountRef are required even on a sparse Payment update) → invoice stays Balance 0, bank drops by
-  ΣCM, CM Balance→0; then set the local CM-consume TAP `sync=ignore`. Forward fix: the consolidated-payment
-  grouping must also key on `payout_id`.
+- **A deposit that consumes a credit memo posts as ONE Payment, net of the credit.** One bank line can
+  pay several invoices while a credit memo reduces the cash. The credit arrives as a bank-funded
+  CM-consume TAP: parent trade account `type = 'credit_memo'`, `source_ta_id` NULL, `import_id` set.
+  Phase 3b groups that deposit and emits `TotalAmt = ΣR − ΣCM` with one Invoice line per invoice at face
+  plus one CreditMemo line, so the bank nets and the credit applies (`RemainingCredit` 0). The group key
+  is `deposit_group_key` in `_shared/common.py`: the parent's `payout_id` where a batching channel stamps
+  one, the payment's `import_id` otherwise, since a plain ACH or wire deposit is one import. A settlement
+  keeps its own path, because its invoice payments already carry cash net of the credit.
+  `CustomerRef` and `DepositToAccountRef` are required on the Line update even though it is sparse.
+
+- **A bank-funded payment row no phase can post whole stops the run before anything posts.**
+  `find_bank_funded_payment_gaps` names the row by id, in the dry run and in the live run.
+  `PAYMENT_MATCHES_NO_PHASE` means no selection reads that row, a bank-funded vendor credit for one.
+  `DEPOSIT_GROUP_SPLIT` means one bank line carries a credit memo keyed on the import and a receivable
+  keyed on a payout, so the credit and the invoices it reduces would group apart and the invoices would
+  post at full face. Neither is answerable from the data. Correct the metadata and run again.
 
 ## Errors that lie
 
