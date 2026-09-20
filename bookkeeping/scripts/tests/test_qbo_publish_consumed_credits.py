@@ -471,12 +471,18 @@ class BankFundedGapTests(unittest.TestCase):
         cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {})
         tap_1 = insert_tap(self.conn, inv_1, 60000, import_id=import_id)
         tap_2 = insert_tap(self.conn, inv_2, 40000, import_id=import_id)
-        insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        tap_cm = insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
         self.conn.commit()
 
         gaps = self._gaps()
-        self.assertEqual({g['payment_id'] for g in gaps}, {tap_1, tap_2})
-        self.assertEqual(self._codes(), ['DEPOSIT_GROUP_SPLIT', 'DEPOSIT_GROUP_SPLIT'])
+        by_row = {g['payment_id']: g['error_code'] for g in gaps}
+        self.assertEqual(by_row, {
+            tap_1: 'DEPOSIT_GROUP_SPLIT',
+            tap_2: 'DEPOSIT_GROUP_SPLIT',
+            # The credit is left in a group of its own, which is the other half of the
+            # same fault and is refused on its own terms.
+            tap_cm: 'PAYOUT_GROUP_INCOMPLETE',
+        })
 
     def test_a_bank_funded_credit_inside_a_settlement_is_a_gap(self):
         """A settlement's cash is already net of its credit, so a bank-funded credit memo
@@ -493,6 +499,63 @@ class BankFundedGapTests(unittest.TestCase):
         gaps = self._gaps()
         self.assertEqual([g['payment_id'] for g in gaps], [cm_tap])
         self.assertEqual(gaps[0]['error_code'], 'PAYMENT_MATCHES_NO_PHASE')
+
+    def test_a_group_the_publisher_would_refuse_is_a_gap(self):
+        """The gate asks the publisher's own question. A deposit whose credit memo has no
+        invoice of its own is refused before anything posts, not after."""
+        import_id = insert_import(self.conn, 50000)
+        inv_ta = insert_ta(self.conn, 'receivable', 60000, 'INV-A', {},
+                           contact='Northwind Supply')
+        cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {},
+                          contact='Dockside Freight')
+        insert_tap(self.conn, inv_ta, 60000, import_id=import_id)
+        cm_tap = insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        self.conn.commit()
+
+        gaps = self._gaps()
+        self.assertEqual([(g['payment_id'], g['error_code']) for g in gaps],
+                         [(cm_tap, 'PAYOUT_GROUP_INCOMPLETE')])
+
+    def test_a_part_published_deposit_is_a_gap(self):
+        """A prior run posted some of this deposit. Consolidating the rest would emit less
+        than the bank line, so the gate stops the run."""
+        _, taps = build_deposit(self.conn, {})
+        self.conn.execute("UPDATE trade_account_payments SET sync = ? WHERE id = ?",
+                          (json.dumps({"status": "synced", "external_id": "PMT-1"}), taps['R1']))
+        self.conn.commit()
+
+        codes = {g['error_code'] for g in self._gaps()}
+        self.assertEqual(codes, {'PAYOUT_PARTIALLY_PUBLISHED'})
+
+    def test_a_credit_larger_than_the_invoices_is_a_gap(self):
+        """No cash reached the bank, so there is no Payment to post."""
+        build_deposit(self.conn, {}, invoice_faces=(5000,), credit_face=9000)
+        codes = {g['error_code'] for g in self._gaps()}
+        self.assertEqual(codes, {'PAYOUT_NEGATIVE_NET'})
+
+    def test_two_dates_in_one_group_is_a_gap(self):
+        """The Payment takes one date from the group, so two dates cannot consolidate."""
+        import_id = insert_import(self.conn, 50000)
+        inv_ta = insert_ta(self.conn, 'receivable', 60000, 'INV-1', {})
+        cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {})
+        insert_tap(self.conn, inv_ta, 60000, import_id=import_id)
+        insert_tap(self.conn, cm_ta, 10000, import_id=import_id, date='2026-05-01')
+        self.conn.commit()
+
+        codes = {g['error_code'] for g in self._gaps()}
+        self.assertEqual(codes, {'PAYOUT_GROUP_HETEROGENEOUS'})
+
+    def test_an_unpublished_parent_invoice_is_not_a_gap(self):
+        """The gate runs before the invoice phase, so an unsynced parent is the ordinary
+        state at that moment. It is retryable, not a refusal."""
+        import_id = insert_import(self.conn, 50000)
+        inv_ta = insert_ta(self.conn, 'receivable', 60000, None, {})
+        cm_ta = insert_ta(self.conn, 'credit_memo', 10000, None, {})
+        insert_tap(self.conn, inv_ta, 60000, import_id=import_id)
+        insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        self.conn.commit()
+
+        self.assertEqual(self._gaps(), [])
 
     def test_a_synced_row_is_not_a_gap(self):
         """The check reads the same population the phases do: already-published rows are

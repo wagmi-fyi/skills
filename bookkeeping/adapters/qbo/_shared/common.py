@@ -526,6 +526,75 @@ def query_payout_consumed_credits(
     return [dict(row) for row in cursor.fetchall()]
 
 
+# How the publisher counts each refusal below. A refusal that a later run could clear on
+# its own is skipped; one that needs a person is failed.
+CONSUMED_CREDIT_REFUSALS = {
+    'PAYOUT_GROUP_INCOMPLETE': 'skipped',
+    'PAYOUT_PARTIALLY_PUBLISHED': 'skipped',
+    'PAYOUT_GROUP_HETEROGENEOUS': 'skipped',
+    'PAYOUT_NEGATIVE_NET': 'failed',
+}
+
+
+def check_consumed_credit_group(
+    conn: sqlite3.Connection,
+    group_key: str,
+    group: List[Dict],
+) -> Optional[Tuple[str, str]]:
+    """Return the first refusal for one consumed-credit group, or None.
+
+    Only the refusals that do not depend on how far a publish run has got: a group that
+    cannot become one QBO Payment whatever else happens. That is what lets the pre-publish
+    gate ask this question before anything posts and get the answer the publisher would
+    give, instead of reporting a clean run and then writing rows to error.
+
+    Deliberately not here: a parent trade account that is not published yet. The gate runs
+    before the invoice phase, so an unsynced parent is the ordinary state at that moment,
+    and the publisher treats it as retryable rather than as a refusal.
+    """
+    inv_rows = [r for r in group if r['role'] == 'invoice']
+    cm_rows = [r for r in group if r['role'] == 'credit']
+
+    # Completeness: a consumed-credit deposit must carry >=1 invoice AND >=1 credit TAP.
+    # The selection guarantees a credit; this catches a group whose invoices went
+    # elsewhere, so no CM-only Payment is ever built.
+    if not inv_rows or not cm_rows:
+        return ('PAYOUT_GROUP_INCOMPLETE',
+                f'Deposit {group_key}: incomplete consumed-credit group '
+                f'({len(inv_rows)} invoice / {len(cm_rows)} credit TAP) — refusing to publish')
+
+    # Partially published: consolidating the remainder would emit a deposit smaller than
+    # the real bank line. Mirrors the settlement_id guard.
+    already_synced = conn.execute(f"""
+        SELECT COUNT(*) FROM trade_account_payments tap
+        JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
+        WHERE tap.source_ta_id IS NULL AND tap.import_id IS NOT NULL
+          AND ta.type IN ('receivable', 'credit_memo')
+          AND {deposit_group_key('ta', 'tap')} = ?
+          AND json_extract(tap.sync, '$.external_id') IS NOT NULL
+    """, (group_key,)).fetchone()[0]
+    if already_synced > 0:
+        return ('PAYOUT_PARTIALLY_PUBLISHED',
+                f'Deposit {group_key}: {already_synced} bank-funded TAP(s) already synced; '
+                f'cannot consolidate remainder. Manual reconciliation required.')
+
+    # Uniformity: the Payment takes its bank, customer and date from one row of the group.
+    banks = {r['payment_account_remote_id'] for r in group if r.get('payment_account_remote_id')}
+    customers = {r['contact_remote_id'] for r in group if r.get('contact_remote_id')}
+    dates = {r['payment_date'] for r in group}
+    if len(banks) > 1 or len(customers) > 1 or len(dates) > 1:
+        return ('PAYOUT_GROUP_HETEROGENEOUS',
+                f'Deposit {group_key}: group has {len(banks)} bank(s), '
+                f'{len(customers)} customer(s), {len(dates)} date(s) — refusing to consolidate.')
+
+    deposit_cents = sum(r['amount'] for r in inv_rows) - sum(r['amount'] for r in cm_rows)
+    if deposit_cents <= 0:
+        return ('PAYOUT_NEGATIVE_NET',
+                f'Deposit {group_key}: deposit_cents={deposit_cents} not > 0 (SUM CM >= SUM R)')
+
+    return None
+
+
 def find_bank_funded_payment_gaps(
     conn: sqlite3.Connection,
     sync_status: str,
@@ -541,7 +610,7 @@ def find_bank_funded_payment_gaps(
     completeness rule in reference/quality-guidelines.md calls that a failure, so this turns
     it into a stop.
 
-    Two gaps, both returned in the publisher's error form:
+    Three gaps, all returned in the publisher's error form:
 
     PAYMENT_MATCHES_NO_PHASE — the row matches no selection. A bank-funded credit memo
     before the consumed-credit phase existed was this; so is any future parent type or
@@ -553,8 +622,13 @@ def find_bank_funded_payment_gaps(
     and the bank would be over by the credit. Which key is right cannot be read off the
     data, so the run stops and a person decides.
 
+    Every code in CONSUMED_CREDIT_REFUSALS — a group with no invoice, a deposit already
+    part-published, two customers or two dates in one group, a credit worth more than the
+    invoices. check_consumed_credit_group answers these, and the publisher calls the same
+    function, so a clean report here means the consumed-credit phase will not refuse.
+
     Call it before anything publishes. Returns [] when every bank-funded row is accounted
-    for.
+    for and every deposit can be posted whole.
     """
     cursor = conn.cursor()
     where = [
@@ -622,6 +696,19 @@ def find_bank_funded_payment_gaps(
                         f"contact as a consumed-credit deposit keyed on import {import_id}, "
                         f"but it is keyed differently, so it sits outside the group. The "
                         f"credit and the invoices it reduces must share one key.")})
+
+    # The group-level refusals, asked here with the same function the publisher uses, so a
+    # clean gate is not followed by a phase that writes rows to error.
+    by_group = defaultdict(list)
+    for row in consumed:
+        by_group[row['group_key']].append(row)
+    for group_key, group in sorted(by_group.items(), key=lambda kv: str(kv[0])):
+        refusal = check_consumed_credit_group(conn, group_key, group)
+        if refusal:
+            code, message = refusal
+            for row in group:
+                gaps.append({'payment_id': row['tap_id'], 'error_code': code,
+                             'error_message': message})
 
     return gaps
 

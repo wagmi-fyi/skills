@@ -47,11 +47,15 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   `CustomerRef` and `DepositToAccountRef` are required on the Line update even though it is sparse.
 
 - **A bank-funded payment row no phase can post whole stops the run before anything posts.**
-  `find_bank_funded_payment_gaps` names the row by id, in the dry run and in the live run.
-  `PAYMENT_MATCHES_NO_PHASE` means no selection reads that row, a bank-funded vendor credit for one.
-  `DEPOSIT_GROUP_SPLIT` means one bank line carries a credit memo keyed on the import and a receivable
-  keyed on a payout, so the credit and the invoices it reduces would group apart and the invoices would
-  post at full face. Neither is answerable from the data. Correct the metadata and run again.
+  `find_bank_funded_payment_gaps` names the row by id, in the dry run and in the live run. It asks two
+  questions. Is every bank-funded row claimed by a phase? `PAYMENT_MATCHES_NO_PHASE` says no, and a
+  bank-funded vendor credit is the case to expect. `DEPOSIT_GROUP_SPLIT` says a bank line carries a
+  credit memo and a receivable for the same contact under two different keys, so the credit and the
+  invoices it reduces would group apart and the invoices would post at full face. Can every deposit
+  become one Payment? That is `check_consumed_credit_group`, which the consumed-credit phase calls
+  too, so a clean gate is never followed by the phase writing rows to error: a credit memo with no
+  invoice of its own, a deposit a prior run part-published, two customers or two dates in one group,
+  a credit worth more than the invoices.
 
 ## Errors that lie
 

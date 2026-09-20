@@ -22,7 +22,7 @@ from _shared.client import save_tokens_if_available
 from _shared.common import (
     query_trade_account_payments, publish_single_qbo_object,
     query_settlement_credit_apps, query_payout_consumed_credits,
-    deposit_group_key
+    check_consumed_credit_group, CONSUMED_CREDIT_REFUSALS
 )
 from _shared.locate import make_tag, confirm_payment_lines_applied
 from _shared.sync_status import update_sync_success, update_sync_error, update_sync_ignore
@@ -458,58 +458,23 @@ def publish_payout_consumed_credits(
         groups[row['group_key']].append(row)
 
     for group_key, group in groups.items():
+        # The group-level refusals live in common.check_consumed_credit_group, which the
+        # pre-publish gate calls too. One function, one answer, whoever asks.
+        refusal = check_consumed_credit_group(conn, group_key, group)
+        if refusal:
+            code, err_msg = refusal
+            for r in group:
+                errors.append({'payment_id': r['tap_id'], 'error_code': code,
+                               'error_message': err_msg})
+                update_sync_error(conn, 'trade_account_payments', r['tap_id'], code)
+            if CONSUMED_CREDIT_REFUSALS[code] == 'failed':
+                failed += len(group)
+            else:
+                skipped += len(group)
+            continue
+
         inv_rows = [r for r in group if r['role'] == 'invoice']
         cm_rows = [r for r in group if r['role'] == 'credit']
-
-        # Completeness: a consumed-credit deposit must carry >=1 invoice AND >=1 credit TAP.
-        # (The selection guarantees a credit exists; this also catches a sync split that
-        # left the group without invoices — fail loud rather than emit a CM-only Payment.)
-        if not inv_rows or not cm_rows:
-            err_msg = (f'Deposit {group_key}: incomplete consumed-credit group '
-                       f'({len(inv_rows)} invoice / {len(cm_rows)} credit TAP) — refusing to publish')
-            for r in group:
-                errors.append({'payment_id': r['tap_id'], 'error_code': 'PAYOUT_GROUP_INCOMPLETE',
-                               'error_message': err_msg})
-                update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'PAYOUT_GROUP_INCOMPLETE')
-                skipped += 1
-            continue
-
-        # Pre-flight: partially-published deposit. If any bank-funded TAP for this deposit is
-        # already synced (a prior partial run), consolidating the remainder would emit a deposit
-        # smaller than the real bank line. Fail loud — mirrors the settlement_id guard. The key
-        # is deposit_group_key(), the same one the selection grouped on.
-        already_synced = conn.execute(f"""
-            SELECT COUNT(*) FROM trade_account_payments tap
-            JOIN trade_accounts ta ON tap.trade_account_id = ta.id
-            WHERE tap.source_ta_id IS NULL AND tap.import_id IS NOT NULL
-              AND ta.type IN ('receivable', 'credit_memo')
-              AND {deposit_group_key('ta', 'tap')} = ?
-              AND json_extract(tap.sync, '$.external_id') IS NOT NULL
-        """, (group_key,)).fetchone()[0]
-        if already_synced > 0:
-            err_msg = (f'Deposit {group_key}: {already_synced} bank-funded TAP(s) already synced; '
-                       f'cannot consolidate remainder. Manual reconciliation required.')
-            for r in group:
-                errors.append({'payment_id': r['tap_id'], 'error_code': 'PAYOUT_PARTIALLY_PUBLISHED',
-                               'error_message': err_msg})
-                update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'PAYOUT_PARTIALLY_PUBLISHED')
-                skipped += 1
-            continue
-
-        # Pre-flight: uniformity. The consolidated Payment uses first_row for bank, customer and
-        # date — a heterogeneous group (config drift, mistag) would silently post the GL wrong.
-        banks = {r['payment_account_remote_id'] for r in group if r.get('payment_account_remote_id')}
-        customers = {r['contact_remote_id'] for r in group if r.get('contact_remote_id')}
-        dates = {r['payment_date'] for r in group}
-        if len(banks) > 1 or len(customers) > 1 or len(dates) > 1:
-            err_msg = (f'Deposit {group_key}: group has {len(banks)} bank(s), '
-                       f'{len(customers)} customer(s), {len(dates)} date(s) — refusing to consolidate.')
-            for r in group:
-                errors.append({'payment_id': r['tap_id'], 'error_code': 'PAYOUT_GROUP_HETEROGENEOUS',
-                               'error_message': err_msg})
-                update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'PAYOUT_GROUP_HETEROGENEOUS')
-                skipped += 1
-            continue
 
         # Pre-flight: every Invoice (R parent) and CreditMemo (credit parent) must have an external_id.
         any_missing = False
@@ -558,15 +523,6 @@ def publish_payout_consumed_credits(
                 errors.append({'payment_id': r['tap_id'], 'error_code': 'LINE_SUM_MISMATCH',
                                'error_message': err_msg})
                 update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'LINE_SUM_MISMATCH')
-            failed += len(group)
-            continue
-
-        if deposit_cents <= 0:
-            err_msg = f'Deposit {group_key}: deposit_cents={deposit_cents} not > 0 (SUM CM >= SUM R)'
-            errors.append({'payment_id': first_row['tap_id'], 'error_code': 'PAYOUT_NEGATIVE_NET',
-                           'error_message': err_msg})
-            for r in group:
-                update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'PAYOUT_NEGATIVE_NET')
             failed += len(group)
             continue
 
