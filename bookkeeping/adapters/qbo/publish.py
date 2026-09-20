@@ -317,20 +317,15 @@ def main():
             sys.exit(0 if result['success'] else 1)
 
         # Live publish. The bank-funded coverage check runs before anything posts: a
-        # dropped payment row or a deposit split across two group keys would put a wrong
-        # number in QBO, and QBO objects are far cheaper to not create than to back out.
+        # dropped payment row or a deposit that cannot be one Payment would put a wrong
+        # number in QBO, and a QBO object is far cheaper to not create than to back out.
+        # It holds back the bank-funded payment phases and nothing else. Journal entries,
+        # invoices, bills and the credit documents carry no wrong number here, and holding
+        # them back would only make the next run larger.
+        payment_gaps = []
         if publish_type in ('all', 'payments'):
-            gaps = find_bank_funded_payment_gaps(
+            payment_gaps = find_bank_funded_payment_gaps(
                 conn, args.sync_status, args.start_date, args.end_date)
-            if gaps:
-                conn.close()
-                print(json.dumps({
-                    "success": False, "dry_run": False,
-                    "error": (f"{len(gaps)} bank-funded payment row(s) no publish phase can "
-                              f"post whole. Nothing was published."),
-                    "errors": gaps,
-                }, indent=2))
-                sys.exit(1)
 
         je_result = {"processed": 0, "failed": 0, "skipped": 0}
         inv_result = {"processed": 0, "failed": 0, "skipped": 0}
@@ -428,8 +423,9 @@ def main():
             ext_ids["credit_applications"] = eids
             all_errors.extend(errs)
 
-        # Phase 3: Bank-funded Payments and BillPayments
-        if publish_type in ('all', 'payments'):
+        # Phase 3: Bank-funded Payments and BillPayments. Held back when the coverage
+        # check found a row these phases cannot post whole.
+        if publish_type in ('all', 'payments') and not payment_gaps:
             p, f, s, errs, eids = publish_payments(
                 publish_client, rate_limiter, conn, _config, args.sync_status, args.start_date, args.end_date, ENV_PATH
             )
@@ -468,13 +464,15 @@ def main():
 
         conn.close()
 
+        all_errors.extend(payment_gaps)
+
         all_results = [je_result, inv_result, bill_result, cm_result, vc_result,
                        capp_result, pay_result, pcc_result, bp_result, oc_result]
         total_failed = sum(r["failed"] for r in all_results)
         total_skipped = sum(r["skipped"] for r in all_results)
 
         result = {
-            "success": total_failed == 0 and total_skipped == 0,
+            "success": total_failed == 0 and total_skipped == 0 and not payment_gaps,
             "dry_run": False,
             "jes": je_result, "invoices": inv_result, "bills": bill_result,
             "credit_memos": cm_result, "vendor_credits": vc_result,

@@ -57,6 +57,16 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   invoice of its own, a deposit a prior run part-published, two customers or two dates in one group,
   a credit worth more than the invoices.
 
+  The stop holds back the bank-funded payment phases and nothing else. Journal entries,
+  invoices, bills and the credit documents publish as usual, so the next run is no larger than
+  it has to be, and the run reports `success: false` with every gap in `errors`.
+
+  Most gaps are a metadata fix: give the credit memo and the invoices it reduces the same
+  contact and the same key, then run again. A row no metadata change can route, a bank-funded
+  vendor credit being the case to expect, has no remedy in the skill today. Publish the rest
+  by naming a narrower `--publish_type`, and raise the row: it needs a publish phase that does
+  not exist yet.
+
 ## Errors that lie
 
 - **QB `10000`/some `6000` errors can post-then-fail.** The object may exist server-side despite

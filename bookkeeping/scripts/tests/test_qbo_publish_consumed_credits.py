@@ -646,5 +646,43 @@ database_name: "%s"
                        'error_message': mock.ANY}, result['errors'])
 
 
+    def _live_run(self):
+        """Run publish.py with no --dry_run. The client is a stand-in and the database holds
+        nothing any phase would send, so nothing reaches the network."""
+        argv = ['publish.py', '--publish_type', 'all']
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, dict(self.PLACEHOLDERS,
+                                              BOOKKEEPING_CONFIG_PATH=self.config)), \
+                mock.patch.object(sys, 'argv', argv), \
+                mock.patch.object(self.publish, 'create_qbo_client',
+                                  return_value=(object(), None)), \
+                redirect_stdout(out):
+            with self.assertRaises(SystemExit) as exit_ctx:
+                self.publish.main()
+        return exit_ctx.exception.code, json.loads(out.getvalue())
+
+    def test_the_live_stop_keeps_the_documented_shape_and_the_other_phases(self):
+        """A row no phase can post holds back the bank-funded payment phases. Journal
+        entries, invoices, bills and the credit documents still run, and the result carries
+        every documented key so a caller can read the error."""
+        import_id = insert_import(self.conn, 25000)
+        vc_ta = insert_ta(self.conn, 'vendor_credit', 25000, 'VC-1', {},
+                          contact='Dockside Freight')
+        tap_id = insert_tap(self.conn, vc_ta, 25000, import_id=import_id)
+        self.conn.commit()
+
+        code, result = self._live_run()
+        self.assertEqual(code, 1)
+        self.assertFalse(result['success'])
+        for key in ('jes', 'invoices', 'bills', 'credit_memos', 'vendor_credits',
+                    'credit_applications', 'payments', 'payout_consumed_credits',
+                    'bill_payments', 'owner_cleared', 'errors', 'external_ids',
+                    'date_range'):
+            self.assertIn(key, result)
+        self.assertEqual(result['payments'], {'processed': 0, 'failed': 0, 'skipped': 0})
+        self.assertIn({'payment_id': tap_id, 'error_code': 'PAYMENT_MATCHES_NO_PHASE',
+                       'error_message': mock.ANY}, result['errors'])
+
+
 if __name__ == '__main__':
     unittest.main()
