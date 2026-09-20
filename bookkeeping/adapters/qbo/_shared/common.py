@@ -130,12 +130,19 @@ def deposit_group_key(ta_alias: str, tap_alias: str) -> str:
     payout id wins where both exist, because an import can span more than one payout
     and a deposit with no payout id spans none.
 
+    A settlement-keyed payment with no payout id gets NULL, which matches nothing.
+    Its cash is already net of the credit and publish_payments consolidates it by
+    settlement_id, so netting it again here would take the credit off twice. A
+    bank-funded credit memo that turns up in such an import is reported by
+    find_bank_funded_payment_gaps rather than guessed at.
+
     Two sites read this key — the selection in query_payout_consumed_credits and the
     disjointness exclusion in query_trade_account_payments — and their row sets must
     stay identical, so both build their SQL from here and cannot drift apart.
     """
     return (f"COALESCE(json_extract({ta_alias}.metadata, '$.payout_id'), "
-            f"'import:' || {tap_alias}.import_id)")
+            f"CASE WHEN json_extract({tap_alias}.metadata, '$.settlement_id') IS NULL "
+            f"THEN 'import:' || {tap_alias}.import_id END)")
 
 
 def query_trade_accounts(
