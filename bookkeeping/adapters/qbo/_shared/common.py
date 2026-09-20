@@ -458,7 +458,8 @@ def query_payout_consumed_credits(
     Group key = deposit_group_key(), returned as 'group_key'. Scoped by sync_status only
     (not date): the row set must stay identical to the query_trade_account_payments
     disjointness exclusion above, so no TAP is ever both consolidated here and posted as a
-    singleton.
+    singleton. A deposit whose rows split across two keys publishes nothing:
+    find_bank_funded_payment_gaps refuses the run before any of it posts.
     """
     cursor = conn.cursor()
     key = deposit_group_key('ta', 'tap')
@@ -501,6 +502,102 @@ def query_payout_consumed_credits(
     """
     cursor.execute(query, (sync_status, sync_status))
     return [dict(row) for row in cursor.fetchall()]
+
+
+def find_bank_funded_payment_gaps(
+    conn: sqlite3.Connection,
+    sync_status: str,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> List[Dict]:
+    """Report every bank-funded TAP the publish phases would not post whole.
+
+    A bank-funded TAP (source_ta_id NULL, import_id set) reaches QBO through exactly two
+    selections: query_trade_account_payments, once per parent type, and
+    query_payout_consumed_credits. A row neither one takes is dropped in silence — it stays
+    pending, it is absent from every count, and the run still reports success. The publish
+    completeness rule in reference/quality-guidelines.md calls that a failure, so this turns
+    it into a stop.
+
+    Two gaps, both returned in the publisher's error form:
+
+    PAYMENT_MATCHES_NO_PHASE — the row matches no selection. A bank-funded credit memo
+    before the consumed-credit phase existed was this; so is any future parent type or
+    metadata shape the phases do not know.
+
+    DEPOSIT_GROUP_SPLIT — one import carries a consumed-credit group keyed on the import
+    while a sibling receivable under that import is keyed on a payout. The credit and the
+    invoices it reduces would land in different groups, so the invoices would post at gross
+    and the bank would be over by the credit. Which key is right cannot be read off the
+    data, so the run stops and a person decides.
+
+    Call it before anything publishes. Returns [] when every bank-funded row is accounted
+    for.
+    """
+    cursor = conn.cursor()
+    where = [
+        "json_extract(tap.sync, '$.status') = ?",
+        "json_extract(tap.sync, '$.external_id') IS NULL",
+        "tap.source_ta_id IS NULL",
+        "tap.import_id IS NOT NULL",
+    ]
+    params = [sync_status]
+    if start_date:
+        where.append("tap.payment_date >= ?")
+        params.append(start_date)
+    if end_date:
+        where.append("tap.payment_date <= ?")
+        params.append(end_date)
+
+    eligible = {
+        row['tap_id']: row
+        for row in (dict(r) for r in cursor.execute(f"""
+            SELECT tap.id AS tap_id, tap.import_id, ta.type AS parent_type
+            FROM trade_account_payments tap
+            INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
+            WHERE {" AND ".join(where)}
+        """, params).fetchall())
+    }
+
+    consumed = query_payout_consumed_credits(conn, sync_status)
+    selected = {r['tap_id'] for r in consumed}
+    for ta_type in ('receivable', 'payable'):
+        selected |= {r['tap_id'] for r in query_trade_account_payments(
+            conn, sync_status, start_date, end_date, ta_type=ta_type)}
+
+    gaps = [
+        {'payment_id': tap_id,
+         'error_code': 'PAYMENT_MATCHES_NO_PHASE',
+         'error_message': (f"Bank-funded payment {tap_id} (parent type '{row['parent_type']}') "
+                           f"matches no publish phase. It would stay pending and the deposit "
+                           f"would post short.")}
+        for tap_id, row in sorted(eligible.items())
+        if tap_id not in selected
+    ]
+
+    # An import-keyed group must hold every bank-funded receivable and credit-memo TAP of
+    # its import. Payable siblings are fine: they publish as BillPayments and the bank nets
+    # across the two objects, the way a four-type settlement already does.
+    import_groups = {}
+    for row in consumed:
+        key = row['group_key']
+        if key and key.startswith('import:'):
+            import_groups.setdefault(key[len('import:'):], set()).add(row['tap_id'])
+    for import_id, in_group in sorted(import_groups.items()):
+        for tap_id, row in sorted(eligible.items()):
+            if (row['import_id'] == import_id
+                    and row['parent_type'] in ('receivable', 'credit_memo')
+                    and tap_id not in in_group):
+                gaps.append({
+                    'payment_id': tap_id,
+                    'error_code': 'DEPOSIT_GROUP_SPLIT',
+                    'error_message': (
+                        f"Bank-funded payment {tap_id} shares import {import_id} with a "
+                        f"consumed-credit deposit keyed on that import, but carries a payout "
+                        f"id of its own, so it sits outside the group. The credit and the "
+                        f"invoices it reduces must share one key.")})
+
+    return gaps
 
 
 def query_settlement_credit_apps(

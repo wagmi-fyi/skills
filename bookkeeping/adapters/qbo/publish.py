@@ -33,7 +33,8 @@ from _shared.client import (
 from _shared.sync_status import update_sync_error
 from _shared.common import (
     query_trade_accounts, group_postings_by_ta, query_trade_account_payments,
-    query_owner_cleared_payments, query_payout_consumed_credits
+    query_owner_cleared_payments, query_payout_consumed_credits,
+    find_bank_funded_payment_gaps
 )
 
 from _publishers.journal_entries import (
@@ -126,6 +127,7 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
         'invoice_count': 0, 'bill_count': 0, 'payment_count': 0, 'bill_payment_count': 0,
         'payout_consumed_credit_count': 0,
         'ta_contact_errors': [], 'payment_parent_errors': [], 'contact_mapping_errors': [],
+        'bank_funded_payment_gaps': [],
     }
 
     if client:
@@ -188,6 +190,10 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
         # itself). Count = distinct deposits.
         pcc_rows = query_payout_consumed_credits(conn, sync_status)
         result['payout_consumed_credit_count'] = len({r['group_key'] for r in pcc_rows})
+        # Every bank-funded payment row must be claimed by a phase, and a deposit must be
+        # posted whole. A gap here is a wrong number waiting to happen, so it fails the run.
+        result['bank_funded_payment_gaps'] = find_bank_funded_payment_gaps(
+            conn, sync_status, start_date, end_date)
 
         for row in recv_pmts + pay_pmts:
             if not row.get('ta_external_id'):
@@ -281,6 +287,7 @@ def main():
                 len(validation['balance_errors']) > 0 or
                 len(validation['class_ref_errors']) > 0 or
                 len(validation.get('ta_contact_errors', [])) > 0 or
+                len(validation.get('bank_funded_payment_gaps', [])) > 0 or
                 (validation['oauth_status'] == 'invalid' and credentials is not None)
             )
 
@@ -289,7 +296,8 @@ def main():
                 validation.get('contact_mapping_errors', []) +
                 validation['balance_errors'] +
                 validation['class_ref_errors'] +
-                validation.get('ta_contact_errors', [])
+                validation.get('ta_contact_errors', []) +
+                validation.get('bank_funded_payment_gaps', [])
             )
 
             result = {
@@ -308,7 +316,22 @@ def main():
             conn.close()
             sys.exit(0 if result['success'] else 1)
 
-        # Live publish
+        # Live publish. The bank-funded coverage check runs before anything posts: a
+        # dropped payment row or a deposit split across two group keys would put a wrong
+        # number in QBO, and QBO objects are far cheaper to not create than to back out.
+        if publish_type in ('all', 'payments'):
+            gaps = find_bank_funded_payment_gaps(
+                conn, args.sync_status, args.start_date, args.end_date)
+            if gaps:
+                conn.close()
+                print(json.dumps({
+                    "success": False, "dry_run": False,
+                    "error": (f"{len(gaps)} bank-funded payment row(s) no publish phase can "
+                              f"post whole. Nothing was published."),
+                    "errors": gaps,
+                }, indent=2))
+                sys.exit(1)
+
         je_result = {"processed": 0, "failed": 0, "skipped": 0}
         inv_result = {"processed": 0, "failed": 0, "skipped": 0}
         bill_result = {"processed": 0, "failed": 0, "skipped": 0}
