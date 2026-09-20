@@ -261,11 +261,12 @@ def query_trade_account_payments(
         # No-op for any deposit without such a TAP. The key comes from deposit_group_key(),
         # the same expression query_payout_consumed_credits selects on.
         #
-        # The parent-type test mirrors that selection exactly. It takes receivable and
-        # credit_memo parents, so only those can be excluded here. A payable on the same bank
-        # line publishes as a BillPayment and the bank nets across the two objects; excluding
-        # it would leave it with no phase at all.
-        f"""(ta.type NOT IN ('receivable', 'credit_memo') OR NOT EXISTS (
+        # The two tests in front of the NOT EXISTS mirror that selection exactly: it takes
+        # receivable and credit_memo parents and it requires an import, so only such a row can
+        # be excluded here. A payable on the same bank line publishes as a BillPayment and the
+        # bank nets across the two objects. A row with no import is nobody's deposit. Excluding
+        # either would leave it with no phase at all.
+        f"""(ta.type NOT IN ('receivable', 'credit_memo') OR tap.import_id IS NULL OR NOT EXISTS (
             SELECT 1 FROM trade_account_payments cmtap
             JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
             WHERE cmta.type = 'credit_memo'
@@ -526,8 +527,10 @@ def query_payout_consumed_credits(
     return [dict(row) for row in cursor.fetchall()]
 
 
-# How the publisher counts each refusal below. A refusal that a later run could clear on
-# its own is skipped; one that needs a person is failed.
+# How the publisher counts each refusal below, keeping the counts each one has always
+# reported. Skipped rows stay retryable; a failed row is one the publisher got far enough to
+# price and could not post. Every one of them needs a person to change the data before the
+# next run selects the group again.
 CONSUMED_CREDIT_REFUSALS = {
     'PAYOUT_GROUP_INCOMPLETE': 'skipped',
     'PAYOUT_PARTIALLY_PUBLISHED': 'skipped',

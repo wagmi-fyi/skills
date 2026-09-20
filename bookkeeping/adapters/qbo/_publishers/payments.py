@@ -467,7 +467,10 @@ def publish_payout_consumed_credits(
                 errors.append({'payment_id': r['tap_id'], 'error_code': code,
                                'error_message': err_msg})
                 update_sync_error(conn, 'trade_account_payments', r['tap_id'], code)
-            if CONSUMED_CREDIT_REFUSALS[code] == 'failed':
+            # A code the table does not carry counts as failed: an unpriceable group is not
+            # something to retry quietly, and a KeyError here would stop a run mid-way with
+            # earlier groups already posted.
+            if CONSUMED_CREDIT_REFUSALS.get(code, 'failed') == 'failed':
                 failed += len(group)
             else:
                 skipped += len(group)

@@ -315,10 +315,23 @@ class ConsumedCreditPublishTests(unittest.TestCase):
         self.conn.commit()
 
         processed, failed, skipped, errors, ext_ids = self._run()
-        self.assertEqual((processed, len(ext_ids)), (0, 0))
+        self.assertEqual((processed, failed, skipped), (0, 0, 1))
+        self.assertEqual(len(ext_ids), 0)
         self.assertEqual(self.captured, [])
-        self.assertTrue(any(e['error_code'] == 'PAYOUT_GROUP_INCOMPLETE' for e in errors), errors)
-        self.assertEqual([e['payment_id'] for e in errors], [cm_tap])
+        self.assertEqual([(e['payment_id'], e['error_code']) for e in errors],
+                         [(cm_tap, 'PAYOUT_GROUP_INCOMPLETE')])
+        # The row carries the refusal, so the next run sees why rather than retrying blind.
+        self.assertEqual(self._tap_sync(cm_tap), ('error', None))
+
+    def test_a_credit_larger_than_the_invoices_counts_as_failed(self):
+        """The refusal table decides the counters. A deposit that brought in no cash was
+        priced and could not be posted, so its rows are failures, not skips."""
+        _, taps = build_deposit(self.conn, {}, invoice_faces=(5000,), credit_face=9000)
+        processed, failed, skipped, errors, ext_ids = self._run()
+        self.assertEqual((processed, failed, skipped), (0, 2, 0))
+        self.assertEqual({e['error_code'] for e in errors}, {'PAYOUT_NEGATIVE_NET'})
+        for tap_id in taps.values():
+            self.assertEqual(self._tap_sync(tap_id), ('error', None))
 
     def test_an_empty_payout_id_does_not_join_two_bank_lines(self):
         """An empty payout id is no payout id. Two bank lines carrying a blank string are
@@ -417,6 +430,22 @@ class DepositGroupKeyTests(unittest.TestCase):
         self.assertEqual(singleton, {bill_tap})
         self.assertEqual(common.find_bank_funded_payment_gaps(
             self.conn, 'pending', None, None), [])
+
+    def test_a_payment_with_no_import_keeps_its_own_path(self):
+        """A payment with no bank line behind it is nobody's deposit. It must not be pulled
+        out of the singleton path by a payout that consumes a credit."""
+        import_id = insert_import(self.conn, 50000)
+        inv_1 = insert_ta(self.conn, 'receivable', 60000, 'INV-1', {'payout_id': 'PO-1'})
+        cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {'payout_id': 'PO-1'})
+        inv_2 = insert_ta(self.conn, 'receivable', 40000, 'INV-2', {'payout_id': 'PO-1'})
+        tap_1 = insert_tap(self.conn, inv_1, 60000, import_id=import_id)
+        tap_cm = insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        tap_no_import = insert_tap(self.conn, inv_2, 40000)
+        self.conn.commit()
+
+        consumed, singleton = self._split()
+        self.assertEqual(consumed, {tap_1, tap_cm})
+        self.assertEqual(singleton, {tap_no_import})
 
     def test_one_import_spanning_two_payouts_is_unaffected(self):
         """A payout that consumes a credit consolidates; another payout on the same bank
