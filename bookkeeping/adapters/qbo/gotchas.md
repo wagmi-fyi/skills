@@ -42,15 +42,19 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   Phase 3b groups that deposit and emits `TotalAmt = ΣR − ΣCM` with one Invoice line per invoice at face
   plus one CreditMemo line, so the bank nets and the credit applies (`RemainingCredit` 0). The group key
   is `deposit_group_key` in `_shared/common.py`: the parent's `payout_id` where a batching channel stamps
-  one, the payment's `import_id` otherwise, since a plain ACH or wire deposit is one import. A settlement
-  keeps its own path, because its invoice payments already carry cash net of the credit.
+  one, otherwise the payment's `import_id` **and the parent's contact**, since a plain ACH or wire deposit
+  is one import and a QBO Payment carries one customer. One bank line paying two customers is two
+  Payments, and a credit memo nets the invoices of its own customer. A settlement keeps its own path,
+  because its invoice payments already carry cash net of the credit.
 
 - **A bank-funded payment row no phase can post whole stops the run before anything posts.**
   `find_bank_funded_payment_gaps` names the row by id, in the dry run and in the live run. It asks two
   questions. Is every bank-funded row claimed by a phase? `PAYMENT_MATCHES_NO_PHASE` says no, and a
-  bank-funded vendor credit is the case to expect. `DEPOSIT_GROUP_SPLIT` says a bank line carries a
-  credit memo and a receivable for the same contact under two different keys, so the credit and the
-  invoices it reduces would group apart and the invoices would post at full face. Can every deposit
+  bank-funded vendor credit is the case to expect. `DEPOSIT_GROUP_SPLIT` says a deposit keyed on its
+  import shares a bank line and a contact with a row that no consumed-credit group holds, so the credit
+  and the invoices it reduces would group apart and those invoices would post at full face. Two whole
+  deposits on one bank line are not a split, and neither is a payable or another customer's row. Can
+  every deposit
   become one Payment? That is `check_consumed_credit_group`, which the consumed-credit phase calls
   too, so a clean gate is never followed by the phase writing rows to error: a credit memo with no
   invoice of its own, a deposit a prior run part-published, two customers or two dates in one group,
@@ -62,9 +66,10 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
 
   Most gaps are a metadata fix: give the credit memo and the invoices it reduces the same
   contact and the same key, then run again. A row no metadata change can route, a bank-funded
-  vendor credit being the case to expect, has no remedy in the skill today. Publish the rest
-  by naming a narrower `--publish_type`, and raise the row: it needs a publish phase that does
-  not exist yet.
+  vendor credit being the case to expect, has no remedy in the skill today, and there is no
+  narrower `--publish_type` that reaches the payment phases without the check. Such a book
+  publishes no bank-funded payments until the row is dealt with. Raise it: it needs a publish
+  phase that does not exist yet.
 
 - **A book whose invoices already posted at full face shows one credit memo in
   `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit,
