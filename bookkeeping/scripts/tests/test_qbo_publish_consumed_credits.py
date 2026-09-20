@@ -211,6 +211,12 @@ class ConsumedCreditPublishTests(unittest.TestCase):
             out[(lt['TxnType'], str(lt['TxnId']))] = ln['Amount']
         return out
 
+    def _bank_amount(self, import_id):
+        """What the bank line is worth, in dollars, straight from the imports row."""
+        cents = self.conn.execute(
+            "SELECT amount FROM imports WHERE id = ?", (import_id,)).fetchone()[0]
+        return round(cents / 100.0, 2)
+
     def _tap_sync(self, tap_id):
         return tuple(self.conn.execute(
             "SELECT json_extract(sync,'$.status'), json_extract(sync,'$.external_id') "
@@ -218,13 +224,15 @@ class ConsumedCreditPublishTests(unittest.TestCase):
 
     def test_payout_keyed_deposit_publishes_one_net_payment(self):
         """The payout-keyed path, pinned: one Payment, net of the credit, every TAP synced."""
-        _, taps = build_deposit(self.conn, {'payout_id': 'PO-1'})
+        import_id, taps = build_deposit(self.conn, {'payout_id': 'PO-1'})
         processed, failed, skipped, errors, ext_ids = self._run()
 
         self.assertEqual((processed, failed, skipped), (3, 0, 0), errors)
         self.assertEqual(len(ext_ids), 1)
         payment = self.captured[0]
         self.assertAlmostEqual(payment.TotalAmt, 900.00, places=2)
+        # The Payment is worth exactly what the bank received.
+        self.assertAlmostEqual(payment.TotalAmt, self._bank_amount(import_id), places=2)
         self.assertEqual(self._lines(payment), {
             ('Invoice', 'INV-1'): 600.00,
             ('Invoice', 'INV-2'): 400.00,
@@ -239,13 +247,15 @@ class ConsumedCreditPublishTests(unittest.TestCase):
     def test_plain_bank_deposit_publishes_one_net_payment(self):
         """One bank line, invoices at face, a credit memo funded by the same line, and no
         channel key anywhere: still one Payment, net of the credit."""
-        _, taps = build_deposit(self.conn, {})
+        import_id, taps = build_deposit(self.conn, {})
         processed, failed, skipped, errors, ext_ids = self._run()
 
         self.assertEqual((processed, failed, skipped), (3, 0, 0), errors)
         self.assertEqual(len(ext_ids), 1)
         payment = self.captured[0]
         self.assertAlmostEqual(payment.TotalAmt, 900.00, places=2)
+        # The Payment is worth exactly what the bank received.
+        self.assertAlmostEqual(payment.TotalAmt, self._bank_amount(import_id), places=2)
         self.assertEqual(self._lines(payment), {
             ('Invoice', 'INV-1'): 600.00,
             ('Invoice', 'INV-2'): 400.00,
