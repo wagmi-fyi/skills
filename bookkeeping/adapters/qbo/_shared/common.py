@@ -250,7 +250,12 @@ def query_trade_account_payments(
         # _publishers/payments.publish_payout_consumed_credits — NOT as gross singletons here.
         # No-op for any deposit without such a TAP. The key comes from deposit_group_key(),
         # the same expression query_payout_consumed_credits selects on.
-        f"""NOT EXISTS (
+        #
+        # The parent-type test mirrors that selection exactly. It takes receivable and
+        # credit_memo parents, so only those can be excluded here. A payable on the same bank
+        # line publishes as a BillPayment and the bank nets across the two objects; excluding
+        # it would leave it with no phase at all.
+        f"""(ta.type NOT IN ('receivable', 'credit_memo') OR NOT EXISTS (
             SELECT 1 FROM trade_account_payments cmtap
             JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
             WHERE cmta.type = 'credit_memo'
@@ -260,7 +265,7 @@ def query_trade_account_payments(
               AND {deposit_group_key('cmta', 'cmtap')} = {deposit_group_key('ta', 'tap')}
               AND json_extract(cmtap.sync, '$.status') = ?
               AND json_extract(cmtap.sync, '$.external_id') IS NULL
-        )""",
+        ))""",
     ]
     params = [sync_status, sync_status]
 

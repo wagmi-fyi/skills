@@ -321,6 +321,25 @@ class DepositGroupKeyTests(unittest.TestCase):
         self.assertEqual(common.find_bank_funded_payment_gaps(
             self.conn, 'pending', None, None), [])
 
+    def test_a_payable_on_the_same_bank_line_keeps_its_own_path(self):
+        """A bank line that pays invoices, nets a credit memo and pays a bill: the bill is a
+        BillPayment, the bank nets across the two objects, and no row is left unclaimed."""
+        import_id = insert_import(self.conn, 70000)
+        inv_ta = insert_ta(self.conn, 'receivable', 60000, 'INV-1', {})
+        cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {})
+        bill_ta = insert_ta(self.conn, 'payable', 20000, 'BILL-1', {},
+                            contact='Dockside Freight')
+        inv_tap = insert_tap(self.conn, inv_ta, 60000, import_id=import_id)
+        cm_tap = insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        bill_tap = insert_tap(self.conn, bill_ta, 20000, import_id=import_id)
+        self.conn.commit()
+
+        consumed, singleton = self._split()
+        self.assertEqual(consumed, {inv_tap, cm_tap})
+        self.assertEqual(singleton, {bill_tap})
+        self.assertEqual(common.find_bank_funded_payment_gaps(
+            self.conn, 'pending', None, None), [])
+
     def test_one_import_spanning_two_payouts_is_unaffected(self):
         """A payout that consumes a credit consolidates; another payout on the same bank
         line still posts its own way. Both are right, so neither is a gap."""
