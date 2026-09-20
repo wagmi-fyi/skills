@@ -261,6 +261,74 @@ class ConsumedCreditPublishTests(unittest.TestCase):
             self.conn, 'pending', None, None, ta_type='receivable')
         self.assertEqual(singletons, [])
 
+    def test_two_customers_on_one_bank_line_publish_separately(self):
+        """A QBO Payment carries one customer. One bank line paying two customers nets the
+        credit against its own customer's invoice and leaves the other customer alone."""
+        import_id = insert_import(self.conn, 90000)
+        inv_a = insert_ta(self.conn, 'receivable', 60000, 'INV-A', {},
+                          contact='Northwind Supply')
+        inv_b = insert_ta(self.conn, 'receivable', 40000, 'INV-B', {},
+                          contact='Dockside Freight')
+        cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {},
+                          contact='Northwind Supply')
+        tap_a = insert_tap(self.conn, inv_a, 60000, import_id=import_id)
+        tap_b = insert_tap(self.conn, inv_b, 40000, import_id=import_id)
+        tap_cm = insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        self.conn.commit()
+
+        processed, failed, skipped, errors, ext_ids = self._run()
+        self.assertEqual((processed, failed, skipped), (2, 0, 0), errors)
+        payment = self.captured[0]
+        self.assertAlmostEqual(payment.TotalAmt, 500.00, places=2)
+        self.assertEqual(self._lines(payment), {
+            ('Invoice', 'INV-A'): 600.00,
+            ('CreditMemo', 'CM-1'): 100.00,
+        })
+        self.assertEqual(self._tap_sync(tap_a), ('synced', ext_ids[0]))
+        self.assertEqual(self._tap_sync(tap_cm), ('synced', ext_ids[0]))
+        # The other customer's invoice is still the singleton path's.
+        self.assertEqual(self._tap_sync(tap_b), ('pending', None))
+        singletons = {r['tap_id'] for r in common.query_trade_account_payments(
+            self.conn, 'pending', None, None, ta_type='receivable')}
+        self.assertEqual(singletons, {tap_b})
+
+    def test_a_credit_memo_with_no_invoice_of_its_own_refuses(self):
+        """The credit memo's customer has nothing to net against on this bank line. That
+        cannot be published, so it is a named refusal and no Payment is built."""
+        import_id = insert_import(self.conn, 50000)
+        inv_ta = insert_ta(self.conn, 'receivable', 60000, 'INV-A', {},
+                           contact='Northwind Supply')
+        cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {},
+                          contact='Dockside Freight')
+        insert_tap(self.conn, inv_ta, 60000, import_id=import_id)
+        cm_tap = insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        self.conn.commit()
+
+        processed, failed, skipped, errors, ext_ids = self._run()
+        self.assertEqual((processed, len(ext_ids)), (0, 0))
+        self.assertEqual(self.captured, [])
+        self.assertTrue(any(e['error_code'] == 'PAYOUT_GROUP_INCOMPLETE' for e in errors), errors)
+        self.assertEqual([e['payment_id'] for e in errors], [cm_tap])
+
+    def test_an_empty_payout_id_does_not_join_two_bank_lines(self):
+        """An empty payout id is no payout id. Two bank lines carrying a blank string are
+        two deposits, not one."""
+        first = insert_import(self.conn, 50000)
+        second = insert_import(self.conn, 30000, date='2026-07-15')
+        inv_1 = insert_ta(self.conn, 'receivable', 60000, 'INV-1', {'payout_id': ''})
+        cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {'payout_id': ''})
+        inv_2 = insert_ta(self.conn, 'receivable', 30000, 'INV-2', {'payout_id': ''})
+        tap_1 = insert_tap(self.conn, inv_1, 60000, import_id=first)
+        tap_cm = insert_tap(self.conn, cm_ta, 10000, import_id=first)
+        tap_2 = insert_tap(self.conn, inv_2, 30000, import_id=second, date='2026-07-15')
+        self.conn.commit()
+
+        consumed = {r['tap_id'] for r in common.query_payout_consumed_credits(self.conn, 'pending')}
+        self.assertEqual(consumed, {tap_1, tap_cm})
+        singletons = {r['tap_id'] for r in common.query_trade_account_payments(
+            self.conn, 'pending', None, None, ta_type='receivable')}
+        self.assertEqual(singletons, {tap_2})
+
     def test_settlement_deposit_stays_with_publish_payments(self):
         """A settlement's payments carry cash already net of its credit. The consumed-credit
         selection must not take them, and the singleton path must still see them."""

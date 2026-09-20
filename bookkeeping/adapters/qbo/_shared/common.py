@@ -121,28 +121,38 @@ def publish_single_qbo_object(client, rate_limiter, qbo_obj, env_path: str) -> T
 # =============================================================================
 
 def deposit_group_key(ta_alias: str, tap_alias: str) -> str:
-    """SQL for the key that names one deposit, given a parent-TA and TAP alias.
+    """SQL for the key that names one consolidated Payment, given a parent-TA and TAP alias.
 
     One bank line can settle several documents at once. A channel that pays out in
     batches stamps a payout_id on the parent trade account, and that id names the
-    deposit. A plain ACH or wire deposit carries no channel key, and there the import
-    is the deposit: an imports row is one bank line, so its id names the group. A
-    payout id wins where both exist, because an import can span more than one payout
-    and a deposit with no payout id spans none.
+    group. A plain ACH or wire deposit carries no channel key, and there the import
+    is the bank line: an imports row is one source transaction, so its id names the
+    group, together with the contact. A QBO Payment carries one customer, so one bank
+    line paying two customers is two Payments, and a credit memo nets the invoices of
+    its own customer.
 
-    A settlement-keyed payment with no payout id gets NULL, which matches nothing.
-    Its cash is already net of the credit and publish_payments consolidates it by
-    settlement_id, so netting it again here would take the credit off twice. A
-    bank-funded credit memo that turns up in such an import is reported by
-    find_bank_funded_payment_gaps rather than guessed at.
+    A payout id takes precedence wherever the parent carries one. It is read before the
+    settlement test below, so a payout-keyed row groups on the payout whatever the
+    payment's settlement_id says. An import can span more than one payout, and a deposit
+    with no payout id spans none.
 
-    Two sites read this key — the selection in query_payout_consumed_credits and the
-    disjointness exclusion in query_trade_account_payments — and their row sets must
-    stay identical, so both build their SQL from here and cannot drift apart.
+    Otherwise a settlement-keyed payment gets NULL, which matches nothing. Its cash is
+    already net of the credit and publish_payments consolidates it by settlement_id, so
+    netting it again here would take the credit off twice. A bank-funded credit memo that
+    turns up in such an import is reported by find_bank_funded_payment_gaps rather than
+    guessed at.
+
+    An empty payout id is no payout id. NULLIF keeps two unrelated bank lines from
+    collapsing into one group on a blank string.
+
+    Every site that needs this key builds it here: the selection in
+    query_payout_consumed_credits, the disjointness exclusion in
+    query_trade_account_payments whose row set must stay its exact complement, and the
+    partial-publish pre-flight in _publishers/payments.py. None of them can drift.
     """
-    return (f"COALESCE(json_extract({ta_alias}.metadata, '$.payout_id'), "
+    return (f"COALESCE(NULLIF(json_extract({ta_alias}.metadata, '$.payout_id'), ''), "
             f"CASE WHEN json_extract({tap_alias}.metadata, '$.settlement_id') IS NULL "
-            f"THEN 'import:' || {tap_alias}.import_id END)")
+            f"THEN 'import:' || {tap_alias}.import_id || '|' || {ta_alias}.contact END)")
 
 
 def query_trade_accounts(
@@ -564,7 +574,7 @@ def find_bank_funded_payment_gaps(
     eligible = {
         row['tap_id']: row
         for row in (dict(r) for r in cursor.execute(f"""
-            SELECT tap.id AS tap_id, tap.import_id, ta.type AS parent_type
+            SELECT tap.id AS tap_id, tap.import_id, ta.type AS parent_type, ta.contact
             FROM trade_account_payments tap
             INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
             WHERE {" AND ".join(where)}
@@ -588,26 +598,30 @@ def find_bank_funded_payment_gaps(
     ]
 
     # An import-keyed group must hold every bank-funded receivable and credit-memo TAP of
-    # its import. Payable siblings are fine: they publish as BillPayments and the bank nets
-    # across the two objects, the way a four-type settlement already does.
+    # its import and contact. Payable siblings are fine: they publish as BillPayments and the
+    # bank nets across the two objects, the way a four-type settlement already does. Another
+    # customer's rows are fine too: they are their own Payment.
     import_groups = {}
     for row in consumed:
-        key = row['group_key']
-        if key and key.startswith('import:'):
-            import_groups.setdefault(key[len('import:'):], set()).add(row['tap_id'])
-    for import_id, in_group in sorted(import_groups.items()):
-        for tap_id, row in sorted(eligible.items()):
-            if (row['import_id'] == import_id
-                    and row['parent_type'] in ('receivable', 'credit_memo')
-                    and tap_id not in in_group):
+        key = row['group_key'] or ''
+        if key.startswith('import:'):
+            import_id, _, contact = key[len('import:'):].partition('|')
+            import_groups.setdefault((import_id, contact), set()).add(row['tap_id'])
+    by_import_contact = defaultdict(list)
+    for tap_id, row in sorted(eligible.items()):
+        if row['parent_type'] in ('receivable', 'credit_memo'):
+            by_import_contact[(row['import_id'], row['contact'])].append(tap_id)
+    for (import_id, contact), in_group in sorted(import_groups.items()):
+        for tap_id in by_import_contact.get((import_id, contact), ()):
+            if tap_id not in in_group:
                 gaps.append({
                     'payment_id': tap_id,
                     'error_code': 'DEPOSIT_GROUP_SPLIT',
                     'error_message': (
-                        f"Bank-funded payment {tap_id} shares import {import_id} with a "
-                        f"consumed-credit deposit keyed on that import, but carries a payout "
-                        f"id of its own, so it sits outside the group. The credit and the "
-                        f"invoices it reduces must share one key.")})
+                        f"Bank-funded payment {tap_id} belongs to the same bank line and "
+                        f"contact as a consumed-credit deposit keyed on import {import_id}, "
+                        f"but it is keyed differently, so it sits outside the group. The "
+                        f"credit and the invoices it reduces must share one key.")})
 
     return gaps
 
