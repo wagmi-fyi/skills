@@ -567,6 +567,37 @@ class BankFundedGapTests(unittest.TestCase):
 
         self.assertEqual(self._gaps(), [])
 
+    def test_two_deposits_on_one_bank_line_and_contact_are_not_a_split(self):
+        """A payout deposit and a plain deposit can share a bank line and a customer. Each is
+        posted whole in its own group, so neither is a gap."""
+        import_id = insert_import(self.conn, 140000)
+        pay_inv = insert_ta(self.conn, 'receivable', 60000, 'INV-1', {'payout_id': 'PO-1'})
+        pay_cm = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {'payout_id': 'PO-1'})
+        plain_inv = insert_ta(self.conn, 'receivable', 100000, 'INV-2', {})
+        plain_cm = insert_ta(self.conn, 'credit_memo', 10000, 'CM-2', {})
+        for ta_id, amount in ((pay_inv, 60000), (pay_cm, 10000),
+                              (plain_inv, 100000), (plain_cm, 10000)):
+            insert_tap(self.conn, ta_id, amount, import_id=import_id)
+        self.conn.commit()
+
+        self.assertEqual(self._gaps(), [])
+
+    def test_a_deposit_outside_the_window_is_another_run_s_business(self):
+        """The consumed-credit selection carries no date window. A broken deposit in another
+        period must not fail this period's run."""
+        december = insert_import(self.conn, 1000, date='2025-12-15')
+        inv_ta = insert_ta(self.conn, 'receivable', 5000, 'INV-D', {}, date='2025-12-01')
+        cm_ta = insert_ta(self.conn, 'credit_memo', 9000, 'CM-D', {}, date='2025-12-01')
+        insert_tap(self.conn, inv_ta, 5000, import_id=december, date='2025-12-15')
+        insert_tap(self.conn, cm_ta, 9000, import_id=december, date='2025-12-15')
+        self.conn.commit()
+
+        # Unscoped, the credit outweighs the invoice and the deposit is refused.
+        self.assertEqual({g['error_code'] for g in self._gaps()}, {'PAYOUT_NEGATIVE_NET'})
+        # Scoped to April, it is out of sight.
+        self.assertEqual(common.find_bank_funded_payment_gaps(
+            self.conn, 'pending', '2026-04-01', '2026-04-30'), [])
+
     def test_a_synced_row_is_not_a_gap(self):
         """The check reads the same population the phases do: already-published rows are
         out of scope, so a finished deposit does not stop the next run."""

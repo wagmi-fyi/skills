@@ -656,7 +656,8 @@ def find_bank_funded_payment_gaps(
     }
 
     consumed = query_payout_consumed_credits(conn, sync_status)
-    selected = {r['tap_id'] for r in consumed}
+    selected_consumed = {r['tap_id'] for r in consumed}
+    selected = set(selected_consumed)
     for ta_type in ('receivable', 'payable'):
         selected |= {r['tap_id'] for r in query_trade_account_payments(
             conn, sync_status, start_date, end_date, ta_type=ta_type)}
@@ -672,22 +673,24 @@ def find_bank_funded_payment_gaps(
     ]
 
     # An import-keyed group must hold every bank-funded receivable and credit-memo TAP of
-    # its import and contact. Payable siblings are fine: they publish as BillPayments and the
-    # bank nets across the two objects, the way a four-type settlement already does. Another
-    # customer's rows are fine too: they are their own Payment.
-    import_groups = {}
+    # its import and contact that no other consumed group already holds. A row in a group of
+    # its own is posted whole there, so two deposits on one bank line are both fine. Payable
+    # siblings are fine too: they publish as BillPayments and the bank nets across the two
+    # objects, the way a four-type settlement already does. So is another customer's row,
+    # which is its own Payment.
+    import_keys = set()
     for row in consumed:
         key = row['group_key'] or ''
-        if key.startswith('import:'):
+        if key.startswith('import:') and row['tap_id'] in eligible:
             import_id, _, contact = key[len('import:'):].partition('|')
-            import_groups.setdefault((import_id, contact), set()).add(row['tap_id'])
+            import_keys.add((import_id, contact))
     by_import_contact = defaultdict(list)
     for tap_id, row in sorted(eligible.items()):
         if row['parent_type'] in ('receivable', 'credit_memo'):
             by_import_contact[(row['import_id'], row['contact'])].append(tap_id)
-    for (import_id, contact), in_group in sorted(import_groups.items()):
+    for import_id, contact in sorted(import_keys):
         for tap_id in by_import_contact.get((import_id, contact), ()):
-            if tap_id not in in_group:
+            if tap_id not in selected_consumed:
                 gaps.append({
                     'payment_id': tap_id,
                     'error_code': 'DEPOSIT_GROUP_SPLIT',
@@ -698,11 +701,15 @@ def find_bank_funded_payment_gaps(
                         f"credit and the invoices it reduces must share one key.")})
 
     # The group-level refusals, asked here with the same function the publisher uses, so a
-    # clean gate is not followed by a phase that writes rows to error.
+    # clean gate is not followed by a phase that writes rows to error. The selection carries
+    # no date window, so only groups holding a row this run would publish are asked about: a
+    # deposit outside the window is another run's business.
     by_group = defaultdict(list)
     for row in consumed:
         by_group[row['group_key']].append(row)
     for group_key, group in sorted(by_group.items(), key=lambda kv: str(kv[0])):
+        if not any(r['tap_id'] in eligible for r in group):
+            continue
         refusal = check_consumed_credit_group(conn, group_key, group)
         if refusal:
             code, message = refusal
