@@ -437,9 +437,9 @@ def main():
             ext_ids["payments"] = eids
             all_errors.extend(errs)
 
-            # Phase 3b: payout-keyed settlements that consume a CreditMemo within the payout
-            # (bank-funded CM-consume fix — one consolidated mixed-Line Payment, net of the CM).
-            # Disjoint from publish_payments above via the query_trade_account_payments exclusion.
+            # Phase 3b: deposits that consume a CreditMemo inside the deposit. One
+            # consolidated mixed-Line Payment per deposit, net of the credit. Disjoint from
+            # publish_payments above via the query_trade_account_payments exclusion.
             p, f, s, errs, eids = publish_payout_consumed_credits(
                 publish_client, rate_limiter, conn, _config, args.sync_status, args.start_date, args.end_date, ENV_PATH
             )

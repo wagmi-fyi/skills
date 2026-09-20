@@ -148,7 +148,7 @@ def deposit_group_key(ta_alias: str, tap_alias: str) -> str:
     Every site that needs this key builds it here: the selection in
     query_payout_consumed_credits, the disjointness exclusion in
     query_trade_account_payments whose row set must stay its exact complement, and the
-    partial-publish pre-flight in _publishers/payments.py. None of them can drift.
+    partial-publish test in check_consumed_credit_group. None of them can drift.
     """
     return (f"COALESCE(NULLIF(json_extract({ta_alias}.metadata, '$.payout_id'), ''), "
             f"CASE WHEN json_extract({tap_alias}.metadata, '$.settlement_id') IS NULL "
