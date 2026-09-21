@@ -36,55 +36,38 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   final state would be valid. Build the complete line set and save once. (Publisher fix tracked in
   the relevant client's publisher-gaps notes.)
 
-- **A deposit that consumes a credit memo posts as ONE Payment, net of the credit.** One bank line can
-  pay several invoices while a credit memo reduces the cash. The credit arrives as a bank-funded
-  CM-consume TAP: parent trade account `type = 'credit_memo'`, `source_ta_id` NULL, `import_id` set.
-  Phase 3b groups that deposit and emits `TotalAmt = ΣR − ΣCM` with one Invoice line per invoice at face
-  plus one CreditMemo line, so the bank nets and the credit applies (`RemainingCredit` 0). The group key
-  is `deposit_group_key` in `_shared/common.py`: the parent's `payout_id` where a batching channel stamps
-  one, otherwise the payment's `import_id` **and the parent's contact**, since a plain ACH or wire deposit
-  is one import and a QBO Payment carries one customer. One bank line paying two customers is two
-  Payments, and a credit memo nets the invoices of its own customer. A settlement keeps its own path,
-  because its invoice payments already carry cash net of the credit.
+- **A deposit that consumes a credit memo posts as ONE Payment, net of the credit.** The credit
+  arrives as a bank-funded CM-consume TAP: parent `type = 'credit_memo'`, `source_ta_id` NULL,
+  `import_id` set. Phase 3b emits `TotalAmt = ΣR − ΣCM` with one Invoice line per invoice at face
+  plus one CreditMemo line. The group key is `deposit_group_key` in `_shared/common.py`: the
+  parent's `payout_id` where a batching channel stamps one, otherwise the payment's `import_id`
+  and the parent's contact. One bank line paying two customers is two Payments. A settlement keeps
+  its own path, because its invoice payments already carry cash net of the credit.
 
-- **A bank-funded payment row no phase can post whole stops the run before anything posts.**
-  `find_bank_funded_payment_gaps` names the row by id, in the dry run and in the live run. The check
-  does two things. It tests that every bank-funded row is claimed by a phase.
-  `PAYMENT_MATCHES_NO_PHASE` is a row no selection reads, and a bank-funded vendor credit is the case
-  to expect. `DEPOSIT_GROUP_SPLIT` is a deposit keyed on its import that shares a bank line and a
-  contact with a row no consumed-credit group holds, so the credit and the invoices it reduces would
-  group apart and those invoices would post at full face. Two whole deposits on one bank line pass. A
-  payable on that line passes, and so does another customer's row. The check also tests that every
-  deposit can become one Payment. That part is `check_consumed_credit_group`, which the
-  consumed-credit phase calls too, so a clean gate is never followed by the phase writing rows to
-  error: a credit memo with no invoice of its own, a deposit a prior run part-published, two customers
-  or two dates in one group, a credit worth more than the invoices.
-
-  The stop holds back the bank-funded payment phases and nothing else. Journal entries,
-  invoices, bills and the credit documents publish as usual, and the run reports
-  `success: false` with every gap in `errors`.
-
-  Most gaps are a metadata fix: give the credit memo and the invoices it reduces the same
-  contact and the same key, then run again. A row no metadata change can route, a bank-funded
-  vendor credit being the case to expect, has no remedy in the skill today, and there is no
-  narrower `--publish_type` that reaches the payment phases without the check. Such a book
-  publishes no bank-funded payments until the row is dealt with. Raise it: it needs a publish
-  phase that does not exist yet.
+- **A bank-funded payment row no phase can post whole holds back the payment phases.**
+  `find_bank_funded_payment_gaps` names each row by id, in the dry run and the live run, before
+  anything posts. `PAYMENT_MATCHES_NO_PHASE`: no selection reads the row, and a bank-funded vendor
+  credit is the case to expect. `DEPOSIT_GROUP_SPLIT`: a credit memo and the invoices it reduces
+  carry different keys, so the invoices would post at full face. The codes of
+  `check_consumed_credit_group`: the deposit cannot become one Payment. Both docstrings carry the
+  detail. Every other phase publishes, and the run reports `success: false` with each gap in
+  `errors`. Most gaps are a metadata fix: give the credit memo and its invoices one contact and
+  one key, then run again. A row no metadata change can route has no remedy in the skill
+  today, and that book publishes no bank-funded payments until the row is dealt with. Raise it.
 
 - **A book whose invoices already posted at full face shows one credit memo in
-  `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit,
-  the CreditMemo floats with `RemainingCredit` equal to its face, and the credit memo's payment
-  row is still pending. The publisher cannot net a deposit whose invoices are already posted,
-  so it refuses the group and the dry run names it. Repair it by hand with the recipe below,
-  then the period ties and later deposits publish whole on their own.
+  `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit, the
+  CreditMemo floats at `RemainingCredit` equal to its face, and its payment row is still pending.
+  The publisher cannot net a deposit whose invoices are already posted. Repair it by hand with the
+  recipe below. Later deposits then publish whole on their own.
 
 - **Netting a credit into a Payment that already posted.** One sparse update on ONE of the
   deposit's QBO Payments: `TotalAmt = ΣR − ΣCM`, `Line = [Invoice LinkedTxn(face), CreditMemo
-  LinkedTxn(face)]`. `CustomerRef` and `DepositToAccountRef` are both required on that update
-  even though neither changes. The invoice stays at Balance 0, the bank drops by ΣCM, and the
-  CreditMemo goes to Balance 0. Then set the local credit-memo payment row to `sync=ignore`, so
-  no later run tries to publish it again. This is the answer to
-  `PAYOUT_PARTIALLY_PUBLISHED`, whose message asks for manual reconciliation.
+  LinkedTxn(face)]`. `CustomerRef` and `DepositToAccountRef` are both required on that update even
+  though neither changes. The invoice stays at Balance 0, the bank drops by ΣCM, and the
+  CreditMemo goes to Balance 0. Then set the local credit-memo payment row to `sync=ignore`, so no
+  later run publishes it. This answers `PAYOUT_PARTIALLY_PUBLISHED`, whose message asks for manual
+  reconciliation.
 
 ## Errors that lie
 
