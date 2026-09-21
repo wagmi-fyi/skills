@@ -550,7 +550,7 @@ def check_consumed_credit_group(
     # Partially published: consolidating the remainder would emit a deposit smaller than
     # the real bank line. The settlement_id guard tests the same thing. It runs before the
     # completeness test below. A deposit whose invoices published at full face leaves a
-    # group holding one credit row, and half posted is what that deposit is.
+    # group holding one credit row. That deposit is half posted.
     already_synced = conn.execute(f"""
         SELECT COUNT(*) FROM trade_account_payments tap
         JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
