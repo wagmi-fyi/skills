@@ -8,15 +8,14 @@ names the invoice rows on that line.
 
 A credit row carrying an external id, or set to ignore, has been dealt with. What tells a
 line repaired by the recipe in gotchas.md from one where somebody put the credit aside
-before anything posted is whether an invoice on that line has published. One has on a
-repaired line, so it passes. None has on the other, so its invoice rows are named.
+before anything posted is whether an invoice on that line has published. A line with one
+passes. A line with none has its invoice rows named.
 
 This module also covers which refusal a half-posted deposit gets.
 
-Five tests assert the gate stays quiet: an ordinary deposit, a repaired line, a line that
-takes a later payment, a deposit with no credit memo, and a second customer on one bank
-line. Three of them pass against the code as it stood before this check existed, so they
-guard against a check that names a row it should leave alone.
+Nine of these tests pass against the code as it stood before this check existed. They say
+nothing about the check working. They are what fails if a later change names a row it
+should leave alone.
 
 Run:
     python3 -m unittest scripts.tests.test_qbo_publish_stranded_credits
@@ -311,7 +310,48 @@ class SyncStatusComplementarityTests(unittest.TestCase):
 
         self.assertEqual(self._named(), {(tap_one, 'DEPOSIT_CREDIT_OFF_STATUS')})
 
-    def test_a_credit_nobody_dealt_with_outranks_one_somebody_did(self):
+    def test_two_payouts_each_answer_for_their_own_credit(self):
+        """One import settling two payouts, each with a credit nobody dealt with. Keeping
+        one credit per bank line named one invoice and let the other publish at full
+        face, and which one it was came down to row order."""
+        import_id = cc.insert_import(self.conn, 90000)
+        named = {}
+        for payout, face in (('PO-1', 60000), ('PO-2', 40000)):
+            inv_ta = cc.insert_ta(self.conn, 'receivable', face, f'INV-{payout}',
+                                  {'payout_id': payout})
+            cm_ta = cc.insert_ta(self.conn, 'credit_memo', 10000, f'CM-{payout}',
+                                 {'payout_id': payout})
+            named[payout] = cc.insert_tap(self.conn, inv_ta, face, import_id=import_id)
+            cm_tap = cc.insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+            self.conn.commit()
+            _set_sync(self.conn, cm_tap, 'error')
+
+        self.assertEqual(self._named(),
+                         {(named['PO-1'], 'DEPOSIT_CREDIT_OFF_STATUS'),
+                          (named['PO-2'], 'DEPOSIT_CREDIT_OFF_STATUS')})
+
+    def test_voiding_a_published_invoice_leaves_the_line_repaired(self):
+        """The Payment that invoice posted is still in QuickBooks after its trade account
+        is voided, so the line has still moved past what this check can help with."""
+        import_id = cc.insert_import(self.conn, 90000)
+        first = cc.insert_ta(self.conn, 'receivable', 60000, 'INV-A', {})
+        cm_ta = cc.insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {})
+        later = cc.insert_ta(self.conn, 'receivable', 40000, 'INV-B', {})
+        tap_first = cc.insert_tap(self.conn, first, 60000, import_id=import_id)
+        tap_cm = cc.insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        cc.insert_tap(self.conn, later, 40000, import_id=import_id)
+        self.conn.commit()
+        _set_sync(self.conn, tap_first, 'synced', external_id='QBO-PMT-1')
+        _set_sync(self.conn, tap_cm, 'ignore')
+        self.assertEqual(self._gaps(), [])
+
+        self.conn.execute("UPDATE trade_accounts SET voided_at = '2026-04-20' WHERE id = ?",
+                          (first,))
+        self.conn.commit()
+
+        self.assertEqual(self._gaps(), [])
+
+    def test_the_message_names_the_credit_a_person_can_act_on(self):
         """A line carrying two credits, one repaired and one errored. The errored one is
         the reason a person can act on, so the message names it."""
         import_id = cc.insert_import(self.conn, 80000)
@@ -333,7 +373,7 @@ class SyncStatusComplementarityTests(unittest.TestCase):
         self.assertIn(tap_stuck, message)
         self.assertIn('its sync status is error', message)
 
-    def test_a_missing_sync_value_reads_as_words(self):
+    def test_a_missing_sync_value_is_described_in_words(self):
         """A row with no sync value at all. The message a person reads carries a phrase
         rather than a Python None."""
         _, taps = cc.build_deposit(self.conn, {})
