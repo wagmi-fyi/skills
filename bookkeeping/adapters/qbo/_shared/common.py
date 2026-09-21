@@ -547,16 +547,10 @@ def check_consumed_credit_group(
     inv_rows = [r for r in group if r['role'] == 'invoice']
     cm_rows = [r for r in group if r['role'] == 'credit']
 
-    # Completeness: a consumed-credit deposit must carry >=1 invoice AND >=1 credit TAP.
-    # The selection guarantees a credit. This test catches a group whose invoices went
-    # elsewhere, so no CM-only Payment is ever built.
-    if not inv_rows or not cm_rows:
-        return ('PAYOUT_GROUP_INCOMPLETE',
-                f'Deposit {group_key}: incomplete consumed-credit group '
-                f'({len(inv_rows)} invoice / {len(cm_rows)} credit TAP). Refusing to publish.')
-
     # Partially published: consolidating the remainder would emit a deposit smaller than
-    # the real bank line. The settlement_id guard tests the same thing.
+    # the real bank line. The settlement_id guard tests the same thing. It runs before the
+    # completeness test below, because a deposit whose invoices published at full face
+    # leaves a group of one credit row, and that is half posted rather than incomplete.
     already_synced = conn.execute(f"""
         SELECT COUNT(*) FROM trade_account_payments tap
         JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
@@ -569,6 +563,15 @@ def check_consumed_credit_group(
         return ('PAYOUT_PARTIALLY_PUBLISHED',
                 f'Deposit {group_key}: {already_synced} bank-funded TAP(s) already synced; '
                 f'cannot consolidate remainder. Manual reconciliation required.')
+
+    # Completeness: a consumed-credit deposit must carry >=1 invoice AND >=1 credit TAP.
+    # The selection guarantees a credit. This test catches a group whose invoices went
+    # elsewhere, so no CM-only Payment is ever built. Nothing on this bank line has
+    # published, or the test above would have answered first.
+    if not inv_rows or not cm_rows:
+        return ('PAYOUT_GROUP_INCOMPLETE',
+                f'Deposit {group_key}: incomplete consumed-credit group '
+                f'({len(inv_rows)} invoice / {len(cm_rows)} credit TAP). Refusing to publish.')
 
     # Uniformity: the Payment takes its bank, customer and date from one row of the group.
     banks = {r['payment_account_remote_id'] for r in group if r.get('payment_account_remote_id')}
