@@ -55,17 +55,15 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   one key, then run again. A row no metadata change can route has no remedy in the skill
   today, and that book publishes no bank-funded payments until the row is dealt with. Raise it.
 
-- **A bank-funded credit memo nothing will post holds back the payment phases.** The
-  consumed-credit selection reads the one sync status the run was given.
-  `DEPOSIT_CREDIT_OFF_STATUS` names each invoice row on that credit's bank line, and the
-  message gives the reason the credit row sits outside the run. A credit that never reached
-  QuickBooks goes back into the run's status. One that did reach QuickBooks needs its id on
-  the row. A row carrying an id, or set to `ignore`, passes the line once an invoice on that
-  line has published, which is where the repair recipe below leaves a book. Before that, the
-  invoices would still publish for more than the bank received, so the check names them and
-  the message says so. Take the credit out of `ignore` there, or void it when it should
-  never post. No script in the skill sets any of these values today, which is the same gap
-  as the unroutable row above. Raise it.
+- **A bank-funded credit memo nothing will post holds back the payment phases.**
+  `DEPOSIT_CREDIT_OFF_STATUS` names each invoice row that shares the credit's bank line and
+  contact, and the message says why the credit row sits outside the run. A credit that never
+  reached QuickBooks goes back into the run's status. One that did reach QuickBooks needs its
+  id on the row. A row carrying an id, or set to `ignore`, passes once an invoice on that
+  line has published, which is where the repair recipe below leaves a book. Before that the
+  invoices would publish for more than the bank received, so take the credit out of
+  `ignore`, or void it when it should never post. No script in the skill sets these values
+  today. Raise it.
 
 - **A run that dies re-posts the one payment it had in flight.** In the three payment
   publishers, what each turn of the loop did reaches the database before the next one
