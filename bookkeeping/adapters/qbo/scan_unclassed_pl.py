@@ -4,32 +4,47 @@ Scan the system of record for P&L activity that carries no class.
 
 The client reads "Profit and Loss by Class" in QuickBooks. Money in that report's unclassed
 column belongs to no class, and this script reads the same report and says what is in it.
-Why staging cannot answer the question, when to skip the check and what to record are in
+Why staging cannot answer the question and what to record are in
 reference/review-checks.md, Check 12.
 
 ## What it reads
 
-Two reports, both on the accrual basis, which is the basis the local ledger keeps.
+The company's accounting preferences first. A company with class tracking switched off
+carries no classes, so there is nothing to check and the scan says so and stops. Without
+that read, QuickBooks answers such a company with an unclassed column holding the whole
+statement, and the scan would call every dollar in the books unclassed. True, and no use
+to anybody.
 
-ProfitAndLoss summarized by Classes gives the column the client sees. The no-class column
-is found by its title ("Not Specified", "Unclassified", "No Class", or blank). A title
-match survives a column moving. It breaks on a relabel, and a client may name a real class
-one of those words, so the second report is what makes the answer safe.
+Then two reports, both on the accrual basis, which is the basis the local ledger keeps.
 
-ProfitAndLossDetail with its class column names every transaction whose class is empty.
+ProfitAndLoss summarized by Classes gives the column the client sees. QuickBooks keys that
+column `not_specified`.
 
-## The tie-out
+ProfitAndLossDetail names every transaction whose class is empty. The account a
+transaction posts to is the section header it sits under. Asking for the account as a
+column returns nothing and no error.
 
-The two reports have to agree that there is unclassed activity, or that there is none. A
-disagreement means the column lookup found the wrong column, or missed the right one, or
-fired on a real class a client happened to name "Unclassified". The scan raises, because
-both failure directions are silent. One reports a client's properly classed money as a
-fault. The other reports a clear gate over money with no class.
+## Reading a column
 
-Their amounts are reported side by side with `totals_agree`, and a difference leaves the
-run standing. An account row aggregates transactions of both signs, so the two sums can
-differ honestly, and the sign conventions of the two reports have not been checked against
-a live company.
+A column's identity is the entry named `ColKey` in its `MetaData`. `ColType` holds a data
+type and `ColTitle` holds a display label, so the names this script asks for are in
+neither.
+
+## The two sides
+
+The summary is the account rollup the client reads. The detail names the records somebody
+has to fix. Money on either side fails the gate, so no shape difference between the two
+reports can read as a clear gate over money with no class.
+
+Their totals go out side by side with `totals_agree`. A difference leaves the run
+standing, because an account row aggregates transactions of both signs, and because the
+sign conventions of the two reports have not been checked against a company that tracks
+classes. When the two disagree over whether there is any unclassed activity at all, the
+summary line says so.
+
+A company that tracks classes and whose detail report carries no class column is a wall,
+and the scan raises. Read as an empty class, a missing column reports every transaction.
+Read as absent, it reports none.
 
 ## Gate semantics
 
@@ -37,9 +52,9 @@ success=False when unclassed P&L activity exists, and exit 1 goes with it, as in
 scan_sor_direct_records.py. The gate flags; a firm that wants it to stop a close says so in
 its firm files.
 
-READ-ONLY against the books: two report reads, no QuickBooks writes, no local database. It
-does write `{local_dir}/adapters/.env` when the shared client rotates an OAuth token, which
-is the housekeeping every QBO adapter here does.
+READ-ONLY against the books: one preference read, two report reads, no QuickBooks writes,
+no local database. It does write `{local_dir}/adapters/.env` when the shared client rotates
+an OAuth token, which is the housekeeping every QBO adapter here does.
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
@@ -67,40 +82,83 @@ from _shared.client import (
 )
 from dotenv import load_dotenv
 
+# SDK entity class — re-exported from the package top level (as qbo_client.py imports it).
+from quickbooks.objects import Preferences
+
 _config = config_loader.load_config()
 ENV_PATH = os.path.join(_config['local_dir'], 'adapters', '.env')
 load_dotenv(ENV_PATH)
 
-# QuickBooks labels the no-class bucket differently across report versions and locales. A
-# label outside this set reads as no unclassed column at all, which the detail report then
-# contradicts, so the tie-out catches it.
+# QuickBooks keys the no-class column `not_specified` whatever it renders as its title.
+UNCLASSED_KEY = 'not_specified'
+
+# The titles QuickBooks renders over that column, across report versions and locales. The
+# fallback for a report that carries no column metadata.
 UNCLASSED_LABELS = {'not specified', 'unclassified', 'no class', ''}
 
 # The local ledger is accrual, so the report is read on that basis. Leaving it to the
 # company preference would make the answer depend on a setting nobody declared.
 ACCOUNTING_METHOD = 'Accrual'
 
-# The detail report's columns, in the report's own column names.
-DETAIL_COLUMNS = ('tx_date,txn_type,doc_num,name,memo,account_name,'
-                  'klass_name,subt_nat_amount')
+# The detail report's columns, by key. account_name is not among them: the account is the
+# section a row sits in, and QuickBooks drops the column from the answer without a word.
+DETAIL_COLUMNS = 'tx_date,txn_type,doc_num,name,memo,klass_name,subt_nat_amount'
 
 # Anything under half a cent is a rounding artifact of the report.
 CENT = 0.005
 
 
-def walk_data_rows(rows, fn):
-    """Call fn on the ColData of every data row, nested sections included.
+def class_tracking(client):
+    """Whether this company tracks classes at all.
+
+    Either switch counts. Per-transaction tracking puts a class on a whole record, and
+    per-line tracking puts one on a line of an invoice.
+    """
+    prefs = Preferences.get(qb=client)
+    info = getattr(prefs, 'AccountingInfoPrefs', None)
+    if info is None:
+        raise RuntimeError('Preferences returned no AccountingInfoPrefs, so whether '
+                           'this company tracks classes cannot be read')
+    return (bool(getattr(info, 'ClassTrackingPerTxn', False))
+            or bool(getattr(info, 'ClassTrackingPerTxnLine', False)))
+
+
+def column_keys(report):
+    """Every column's QuickBooks key, in report order.
+
+    The key is the `MetaData` entry named `ColKey`. A column carrying no such entry gets
+    the empty string, which matches no name this script asks for.
+    """
+    keys = []
+    for column in report.get('Columns', {}).get('Column', []):
+        key = ''
+        for entry in column.get('MetaData') or []:
+            if entry.get('Name') == 'ColKey':
+                key = entry.get('Value') or ''
+        keys.append(key)
+    return keys
+
+
+def walk_data_rows(rows, fn, section=None):
+    """Call fn(col_data, section) on every data row, nested sections included.
 
     A QuickBooks report section carries its own labels under Header and Summary, which are
     separate keys. A data row is the only kind with ColData at its top level, so a section
     total stays out of the count alongside the lines it totals.
+
+    `section` is the ColData of the nearest enclosing section header that names something
+    with a QuickBooks id. On the detail report that header is the account. A header with
+    no id is a classification group, Income or Expenses, and the account it encloses
+    stands.
     """
     for row in rows or []:
+        header = (row.get('Header') or {}).get('ColData') or []
+        inner = header if header and header[0].get('id') else section
         nested = row.get('Rows')
         if isinstance(nested, dict) and nested.get('Row'):
-            walk_data_rows(nested['Row'], fn)
+            walk_data_rows(nested['Row'], fn, inner)
         if row.get('ColData'):
-            fn(row['ColData'])
+            fn(row['ColData'], section)
 
 
 def parse_amount(raw, where):
@@ -122,10 +180,16 @@ def parse_amount(raw, where):
 def find_unclassed_column(report):
     """Return (index, label) of the no-class column, or (None, None).
 
-    The column is found by its title. Column 0 holds the account name and the last column
-    usually holds the total, so both are skipped.
+    The key is the answer. The title match behind it is the fallback for a report with no
+    column metadata, and it skips column 0, which holds the account name under a blank
+    title that is itself one of the labels. The last column is the row total.
     """
     columns = report.get('Columns', {}).get('Column', [])
+
+    for i, key in enumerate(column_keys(report)):
+        if key == UNCLASSED_KEY:
+            return i, (columns[i].get('ColTitle') or '(blank)')
+
     for i, column in enumerate(columns):
         title = (column.get('ColTitle') or '').strip().lower()
         if i == 0 or title == 'total':
@@ -145,7 +209,7 @@ def unclassed_by_account(report, index):
     """
     found = []
 
-    def collect(col_data):
+    def collect(col_data, _section):
         if len(col_data) <= index or not col_data[0].get('id'):
             return
         amount = parse_amount(col_data[index].get('value'),
@@ -161,14 +225,12 @@ def unclassed_by_account(report, index):
 
 def unclassed_records(report):
     """Every transaction in the detail report whose class cell is empty."""
-    columns = [(c.get('ColType') or c.get('ColTitle') or '')
-               for c in report.get('Columns', {}).get('Column', [])]
-    index = {name: i for i, name in enumerate(columns)}
+    index = {key: i for i, key in enumerate(column_keys(report)) if key}
     class_at = index.get('klass_name')
     if class_at is None:
         raise RuntimeError(
-            "ProfitAndLossDetail returned no klass_name column; asked for: "
-            f"{DETAIL_COLUMNS}")
+            "ProfitAndLossDetail returned no klass_name column on a company that tracks "
+            f"classes; asked for: {DETAIL_COLUMNS}")
 
     found = []
 
@@ -178,7 +240,7 @@ def unclassed_records(report):
             return ''
         return col_data[at].get('value') or ''
 
-    def collect(col_data):
+    def collect(col_data, section):
         if len(col_data) <= class_at:
             return
         if (col_data[class_at].get('value') or '').strip():
@@ -194,7 +256,7 @@ def unclassed_records(report):
             'date': cell(col_data, 'tx_date'),
             'doc_num': cell(col_data, 'doc_num'),
             'name': cell(col_data, 'name'),
-            'account': cell(col_data, 'account_name'),
+            'account': (section[0].get('value') or '') if section else '',
             'amount': round(amount, 2),
             'id': (col_data[date_at].get('id')
                    if date_at is not None and len(col_data) > date_at else None),
@@ -205,56 +267,56 @@ def unclassed_records(report):
 
 
 def scan(client, period_start, period_end):
-    """Read both reports, tie them out, and return the result the caller prints."""
-    summary_report = client.get_report('ProfitAndLoss', qs={
-        'start_date': period_start,
-        'end_date': period_end,
-        'summarize_column_by': 'Classes',
-        'accounting_method': ACCOUNTING_METHOD,
-    })
+    """Read the preference, then both reports, and return the result the caller prints."""
+    tracking = class_tracking(client)
+    accounts, records, class_columns, label = [], [], [], None
 
-    index, label = find_unclassed_column(summary_report)
-    class_columns = [(c.get('ColTitle') or '')
-                     for c in summary_report.get('Columns', {}).get('Column', [])]
+    if tracking:
+        summary_report = client.get_report('ProfitAndLoss', qs={
+            'start_date': period_start,
+            'end_date': period_end,
+            'summarize_column_by': 'Classes',
+            'accounting_method': ACCOUNTING_METHOD,
+        })
 
-    accounts = unclassed_by_account(summary_report, index) if index is not None else []
+        index, label = find_unclassed_column(summary_report)
+        class_columns = [(c.get('ColTitle') or '')
+                         for c in summary_report.get('Columns', {}).get('Column', [])]
+        accounts = unclassed_by_account(summary_report, index) if index is not None else []
 
-    detail_report = client.get_report('ProfitAndLossDetail', qs={
-        'start_date': period_start,
-        'end_date': period_end,
-        'columns': DETAIL_COLUMNS,
-        'accounting_method': ACCOUNTING_METHOD,
-    })
-    records = unclassed_records(detail_report)
+        detail_report = client.get_report('ProfitAndLossDetail', qs={
+            'start_date': period_start,
+            'end_date': period_end,
+            'columns': DETAIL_COLUMNS,
+            'accounting_method': ACCOUNTING_METHOD,
+        })
+        records = unclassed_records(detail_report)
 
     account_total = round(sum(a['amount'] for a in accounts), 2)
     record_total = round(sum(r['amount'] for r in records), 2)
+    clear = not accounts and not records
 
-    if bool(accounts) != bool(records):
-        raise RuntimeError(
-            f"the two reports disagree for {period_start}..{period_end}. "
-            f"ProfitAndLoss by Class found {len(accounts)} account(s) in the "
-            f"{label!r} column and ProfitAndLossDetail found {len(records)} "
-            f"transaction(s) with an empty class. The class columns are "
-            f"{class_columns}. Either the column lookup took a real class for the "
-            f"no-class bucket, or QuickBooks labels that bucket with a title this "
-            f"scan does not know.")
-
-    clear = not accounts
-    if clear:
+    if not tracking:
+        summary = ('NOT APPLICABLE. Class tracking is off in QuickBooks; nothing to '
+                   'check.')
+    elif clear:
         summary = (f"CLEAR. No unclassed P&L activity in {period_start}..{period_end}. "
-                   f"Profit and Loss by Class has no unclassed column, and no "
-                   f"transaction in the period has an empty class.")
+                   f"Profit and Loss by Class holds no money in an unclassed column, "
+                   f"and every transaction in the period carries a class.")
     else:
-        summary = (f"UNCLASSED P&L ACTIVITY. {len(accounts)} account(s) and "
-                   f"{len(records)} transaction(s) carry no class in "
-                   f"{period_start}..{period_end}, and the client sees them in the "
-                   f"'{label}' column of Profit and Loss by Class. The column reads "
-                   f"{account_total:,.2f} as the report renders it. Stamp the class on "
-                   f"the QuickBooks record.")
+        summary = (f"UNCLASSED P&L ACTIVITY in {period_start}..{period_end}. "
+                   f"{len(accounts)} account(s) hold {account_total:,.2f} in the "
+                   f"{label or 'unclassed'} column of Profit and Loss by Class. The "
+                   f"detail report names {len(records)} transaction(s) carrying no "
+                   f"class, {record_total:,.2f} in all. Stamp the class on the "
+                   f"QuickBooks record.")
+        if bool(accounts) != bool(records):
+            summary += (' The two reports disagree over whether any exists. Read '
+                        'unclassed_by_account against unclassed_records before acting.')
 
     return {
         'success': clear,
+        'class_tracking': tracking,
         'period': [period_start, period_end],
         'accounting_method': ACCOUNTING_METHOD,
         'class_columns': class_columns,
