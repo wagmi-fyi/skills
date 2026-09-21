@@ -176,9 +176,10 @@ def make_db(contacts, postings=(), trade_accounts=()):
         conn.execute("INSERT INTO chart_of_accounts (code, name, type, meta) "
                      "VALUES (?,?,?,?)",
                      (code, name, kind, json.dumps({'qbo_type': qbo_type})))
-    for name in contacts:
-        conn.execute("INSERT INTO contacts (name, remote_id, meta) VALUES (?, NULL, '{}')",
-                     (name,))
+    for entry in contacts:
+        name, remote_id = entry if isinstance(entry, tuple) else (entry, None)
+        conn.execute("INSERT INTO contacts (name, remote_id, meta) VALUES (?, ?, '{}')",
+                     (name, remote_id))
     conn.execute("INSERT INTO journal_entries (id, transaction_date, memo) "
                  "VALUES ('JE1', '2026-08-14', 'seed')")
     for n, (contact, code) in enumerate(postings):
@@ -310,7 +311,8 @@ class BlankNameTests(unittest.TestCase):
         self.assertNotIn(' (Vendor)', self._contacts(conn))
         self.assertEqual(vendor._created, [])
         self.assertEqual(result['dual_use_splits'], [])
-        self.assertEqual([r['reason'] for r in result['refused']], ['blank_name'])
+        self.assertEqual([r['reason'] for r in result['refused']],
+                         ['blank_name_source'])
 
     def test_create_vendor_split_refuses_a_blank_source_when_called_directly(self):
         """The refusal lives in the function, so a later caller inherits it."""
@@ -342,6 +344,39 @@ class BlankNameTests(unittest.TestCase):
         ).fetchone()[0], 'Northwind Supply (Vendor)')
         self.assertEqual(result['refused'], [])
 
+    def test_a_refusal_says_where_the_rows_are_and_what_to_do(self):
+        conn = self._db([''], postings=[('', '5000'), ('', '5000')])
+        refusal = self._run(conn)['refused'][0]
+
+        self.assertEqual(refusal['contact'], '')
+        self.assertEqual(refusal['reason'], 'blank_name')
+        self.assertEqual((refusal['ar_postings'], refusal['ap_postings']), (0, 0))
+        self.assertEqual((refusal['recv_tas'], refusal['pay_tas']), (0, 0))
+        self.assertIn('re-run', refusal['remedy'])
+
+    def test_a_blank_contact_quickbooks_already_holds_is_skipped_not_refused(self):
+        """It is already there and this run cannot fix its name. Refusing it would fail
+        every close from now on over something no re-run changes."""
+        conn = self._db([('', 'V-OLD'), 'Northwind Supply'],
+                        postings=[('', '5000'), ('Northwind Supply', '5000')])
+        vendor = fake_entity('Vendor', next_ids=['V1'])
+        result = self._run(conn, vendor=vendor)
+
+        self.assertEqual(result['refused'], [])
+        self.assertEqual(result['skipped'], 1)
+        self.assertEqual(vendor._created, ['Northwind Supply'])
+
+    def test_the_counters_still_add_up(self):
+        conn = self._db(['', 'Northwind Supply', 'Harbor Lane Studio'],
+                        postings=[('', '5000'), ('Northwind Supply', '5000'),
+                                  ('Harbor Lane Studio', '5000')])
+        result = self._run(conn, vendor=fake_entity('Vendor', next_ids=['V1', 'V2']))
+        self.assertEqual(
+            result['classified'],
+            result['customers_created'] + result['customers_existing']
+            + result['vendors_created'] + result['vendors_existing']
+            + result['skipped'])
+
     # ---------------- dry run ----------------
 
     def test_a_dry_run_creates_nothing_and_writes_nothing(self):
@@ -355,9 +390,13 @@ class BlankNameTests(unittest.TestCase):
         self.assertIsNone(self._contacts(conn)['Northwind Supply'][0])
 
     def test_a_dry_run_still_refuses_a_blank_name(self):
+        """A dry run reports what the live run will do. The live run will not create this
+        contact, so the preview says so rather than counting it as a create."""
         conn = self._db([''], postings=[('', '5000')])
         result = self._run(conn, dry_run=True)
         self.assertEqual([r['reason'] for r in result['refused']], ['blank_name'])
+        self.assertEqual(result['vendors_created'], 0)
+        self.assertEqual(result['details'], [])
 
 
 if __name__ == '__main__':
