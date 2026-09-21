@@ -4,12 +4,12 @@ Hermetic tests for scan_unclassed_pl.py. No real QuickBooks calls.
 
 Covers adapters/qbo/scan_unclassed_pl.py:
 
-  * Finding the no-class column by its title, never by its position, over every label
-    QuickBooks uses for that bucket.
+  * Finding the no-class column by its title, over every label QuickBooks uses for that
+    bucket.
   * The leaf-account test. A report row with no account id is a total or a label, and
     counting one adds the same money to the column twice.
   * The tie-out between the two reports. A summary that finds a column the detail does not
-    corroborate, or the other way about, raises rather than answers.
+    corroborate, or the other way about, raises.
   * A cell that is not a number raises, so a row cannot drop out of a finding in silence.
   * A classed transaction is left out of the record list.
   * A detail report with no class column raises, so a missing column cannot read as no
@@ -138,7 +138,7 @@ def account_row(account_id, *values):
 
 
 def total_row(*values):
-    """A report row with no account id: a total or a label, never an account."""
+    """A report row with no account id. QuickBooks shapes a total or a label this way."""
     return {'type': 'Data', 'ColData': [{'value': v} for v in values]}
 
 
