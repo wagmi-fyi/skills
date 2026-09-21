@@ -47,7 +47,7 @@ def _set_sync(conn, tap_id, status, external_id=None):
 
 @unittest.skipUnless(cc.QBO_SDK_PRESENT, cc.SOR_SKIP_REASON)
 class SyncStatusComplementarityTests(unittest.TestCase):
-    """Hole 1: the credit row's sync status decides whether its invoices net."""
+    """The credit row's sync status decides whether its invoices net."""
 
     def setUp(self):
         cc._load_modules()
