@@ -65,15 +65,13 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   `ignore`, or void it when it should never post. No script in the skill sets these values
   today. Raise it.
 
-- **A run that dies re-posts the one payment it had in flight.** In the three payment
-  publishers, what each turn of the loop did reaches the database before the next one
-  reaches QuickBooks, so a crash costs that one payment. It had reached QuickBooks without
-  its id reaching staging, and the next run posts it again.
-  `scan_sor_direct_records.py` does not see such a duplicate, because it carries the
-  `[bk:]` tag like any published object. The invoice, bill and credit-document publishers
-  still save once at the end of their phase, so a crash there loses every id that phase
-  wrote. After a run that is known to have died, the rows still unpublished are the ones to
-  check, in `trade_accounts` as well as `trade_account_payments`.
+- **A run that dies re-posts the one payment it had in flight.** The three payment
+  publishers save each turn of the loop before the next one reaches QuickBooks, so a crash
+  costs the payment whose id had not reached staging. `scan_sor_direct_records.py` does not
+  see that duplicate, because it carries the `[bk:]` tag. The invoice, bill and
+  credit-document publishers still save once at the end of their phase, so a crash there
+  loses every id that phase wrote. After a run known to have died, check the rows still
+  unpublished, in `trade_accounts` as well as `trade_account_payments`.
 
 - **A book whose invoices already posted at full face shows one credit memo in
   `PAYOUT_PARTIALLY_PUBLISHED`.** The bank is over by the credit, the CreditMemo floats at
