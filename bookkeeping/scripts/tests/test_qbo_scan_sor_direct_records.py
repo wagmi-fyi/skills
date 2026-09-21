@@ -48,7 +48,12 @@ SKILL_DIR = os.path.dirname(SCRIPTS_DIR)
 QBO_DIR = os.path.join(SKILL_DIR, 'adapters', 'qbo')
 SCHEMA_PATH = os.path.join(SKILL_DIR, 'reference', 'schema.sql')
 
+# The names this module replaces in sys.modules, and what was there before.
+STUBBED = ('_shared', '_shared.client', 'config_loader', 'scan_sor_direct_records')
+
 scan_module = None
+_saved_modules = None
+_saved_path = None
 
 # The types the publisher never creates. Every one of them in the window is a direct
 # record, whatever else the scan finds.
@@ -63,13 +68,16 @@ def _load_module():
     the qbo skill's client, which exits the process on a machine with no QuickBooks
     credentials, and nothing here calls it.
     """
-    global scan_module
+    global scan_module, _saved_modules, _saved_path
     if scan_module is not None:
         return scan_module
 
-    for name in [k for k in list(sys.modules)
-                 if k == '_shared' or k.startswith('_shared.')
-                 or k in ('config_loader', 'scan_sor_direct_records')]:
+    names = [k for k in list(sys.modules)
+             if k == '_shared' or k.startswith('_shared.')
+             or k in ('config_loader', 'scan_sor_direct_records')]
+    _saved_modules = {k: sys.modules[k] for k in names}
+    _saved_path = list(sys.path)
+    for name in names:
         del sys.modules[name]
 
     tmpdir = tempfile.mkdtemp()
@@ -100,6 +108,24 @@ def _load_module():
     import scan_sor_direct_records as module
     scan_module = module
     return module
+
+
+def tearDownModule():
+    """Put sys.modules and sys.path back.
+
+    The stubs replace names other test modules import for real, so a module running after
+    this one in the same process would get the fakes.
+    """
+    global scan_module, _saved_modules, _saved_path
+    if _saved_modules is None:
+        return
+    for name in STUBBED:
+        sys.modules.pop(name, None)
+    sys.modules.update(_saved_modules)
+    sys.path[:] = _saved_path
+    scan_module = None
+    _saved_modules = None
+    _saved_path = None
 
 
 class _Record:
