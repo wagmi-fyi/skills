@@ -77,10 +77,11 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   check, in `trade_accounts` as well as `trade_account_payments`.
 
 - **A book whose invoices already posted at full face shows one credit memo in
-  `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit, the
-  CreditMemo floats at `RemainingCredit` equal to its face, and its payment row is still pending.
-  The publisher cannot net a deposit whose invoices are already posted. Repair it by hand with the
-  recipe below. Later deposits then publish whole on their own.
+  `PAYOUT_PARTIALLY_PUBLISHED`.** The bank is over by the credit, the CreditMemo floats at
+  `RemainingCredit` equal to its face, and its payment row is still pending. The publisher cannot
+  net a deposit whose invoices are already posted. Repair it by hand with the recipe below. Later
+  deposits then publish whole on their own. `PAYOUT_GROUP_INCOMPLETE` is a different state: the
+  credit memo's customer has no invoice on that bank line and nothing there has published.
 
 - **Netting a credit into a Payment that already posted.** One sparse update on ONE of the
   deposit's QBO Payments: `TotalAmt = ΣR − ΣCM`, `Line = [Invoice LinkedTxn(face), CreditMemo
