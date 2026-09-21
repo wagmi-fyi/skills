@@ -590,8 +590,13 @@ def check_consumed_credit_group(
     return None
 
 
-def _stranded_credit_reason(status, has_key: bool, sync_status: str) -> str:
+def _stranded_credit_reason(status, external_id, has_key: bool, sync_status: str) -> str:
     """Why a bank-funded credit memo's payment row is outside this run's selection."""
+    if external_id is not None:
+        return (f"it carries external id {external_id}, and no invoice on this line has "
+                f"published")
+    if status == 'ignore':
+        return "it is set to ignore, and no invoice on this line has published"
     if not has_key:
         return ("its bank line is settled through a channel, and the consumed-credit phase "
                 "reads no settled line")
@@ -637,8 +642,9 @@ def find_bank_funded_payment_gaps(
     The line then publishes payments that do not agree with the money the bank received.
     This check reads the credit rows whatever status they carry. It pairs them on the bank
     line and the contact, which reaches a settled line, whose deposit key is NULL by design.
-    A credit row carrying an external id is in QBO, and one set to ignore never will be, so
-    neither strands its line.
+    A credit row carrying an external id, or set to ignore, has been dealt with. That line
+    passes once an invoice on it has published, which is where the repair recipe in
+    gotchas.md leaves a book. Until then the invoice rows are named.
 
     Every code in CONSUMED_CREDIT_REFUSALS is a gap too. check_consumed_credit_group tests
     them, and the publisher calls the same function, so a clean report means the
@@ -725,31 +731,50 @@ def find_bank_funded_payment_gaps(
     # way the invoice rows are named.
     #
     # A credit row carrying an external id is in QBO, and one set to ignore is a person's
-    # decision that it never will be. publish.py selects neither, and
-    # scan_sor_direct_records.py counts both as accounted for, so neither strands its line.
+    # decision that it never will be. Both say somebody has dealt with the credit, and the
+    # recipe in gotchas.md ends that way. What tells a repaired line from one where the
+    # credit was put aside before anything posted is whether an invoice on that line has
+    # published. Where one has, the line is past what this check can help with. Where none
+    # has, the eligible invoice rows would still publish for more than the bank received,
+    # so they are named.
     #
     # Rows pair on the bank line and the contact, which is what reaches a settled line,
     # whose deposit key is NULL. A key on both sides that disagrees is two deposits sharing
-    # one bank line, and neither reduces the other.
+    # one bank line, and neither reduces the other. The published-invoice test reads the
+    # key the same way, so one payout's posted invoice cannot vouch for another's.
     inv_key = deposit_group_key('ta', 'tap')
     cm_key = deposit_group_key('cmta', 'cmtap')
     stranded = {}
-    for import_id, contact, cm_tap_id, cm_status, cm_group_key in cursor.execute(f"""
+    for import_id, contact, cm_tap_id, cm_status, cm_ext, cm_group_key in cursor.execute(f"""
         SELECT cmtap.import_id, cmta.contact, cmtap.id,
-               json_extract(cmtap.sync, '$.status'), {cm_key}
+               json_extract(cmtap.sync, '$.status'),
+               json_extract(cmtap.sync, '$.external_id'), {cm_key}
         FROM trade_account_payments cmtap
         INNER JOIN trade_accounts cmta
             ON cmtap.trade_account_id = cmta.id AND cmta.voided_at IS NULL
         WHERE cmta.type = 'credit_memo' AND cmtap.source_ta_id IS NULL
           AND cmtap.import_id IS NOT NULL
-          AND json_extract(cmtap.sync, '$.external_id') IS NULL
-          AND COALESCE(json_extract(cmtap.sync, '$.status'), '') != 'ignore'
         ORDER BY cmtap.id
     """).fetchall():
-        if cm_tap_id not in selected_consumed:
-            stranded.setdefault((import_id, contact),
-                                (cm_tap_id, cm_status, cm_group_key))
+        if cm_tap_id in selected_consumed:
+            continue
+        dealt_with = cm_ext is not None or cm_status == 'ignore'
+        seen = stranded.get((import_id, contact))
+        # A credit nobody has dealt with is the more useful cause to report.
+        if seen is None or (seen[3] and not dealt_with):
+            stranded[(import_id, contact)] = (cm_tap_id, cm_status, cm_ext, dealt_with,
+                                              cm_group_key)
     if stranded:
+        published = defaultdict(list)
+        for import_id, contact, group_key in cursor.execute(f"""
+            SELECT tap.import_id, ta.contact, {inv_key}
+            FROM trade_account_payments tap
+            INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
+            WHERE ta.type = 'receivable' AND tap.source_ta_id IS NULL
+              AND tap.import_id IS NOT NULL
+              AND json_extract(tap.sync, '$.external_id') IS NOT NULL
+        """).fetchall():
+            published[(import_id, contact)].append(group_key)
         for tap_id, import_id, contact, group_key in cursor.execute(f"""
             SELECT tap.id, tap.import_id, ta.contact, {inv_key}
             FROM trade_account_payments tap
@@ -760,10 +785,15 @@ def find_bank_funded_payment_gaps(
             found = stranded.get((import_id, contact))
             if found is None:
                 continue
-            cm_tap_id, cm_status, cm_group_key = found
+            cm_tap_id, cm_status, cm_ext, dealt_with, cm_group_key = found
             if group_key is not None and cm_group_key is not None and group_key != cm_group_key:
                 continue
-            reason = _stranded_credit_reason(cm_status, cm_group_key is not None, sync_status)
+            if dealt_with and any(
+                    key is None or cm_group_key is None or key == cm_group_key
+                    for key in published[(import_id, contact)]):
+                continue
+            reason = _stranded_credit_reason(cm_status, cm_ext,
+                                             cm_group_key is not None, sync_status)
             gaps.append({
                 'payment_id': tap_id,
                 'error_code': 'DEPOSIT_CREDIT_OFF_STATUS',
