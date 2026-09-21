@@ -64,10 +64,19 @@ suppressed from the gate but reported in `linked_untagged_records` (and voided r
 voided) STILL surfaces — that is the whole point of HS7.
 
 ## Entity coverage
-Scans every transaction entity the publisher tags, PLUS Deposit and Purchase — two common
-direct-entry types the publisher NEVER creates, so any of them in the window is inherently a
-direct record (they always surface; that is the intended signal — a bank-feed Deposit or a
-directly-entered check/expense the pipeline would otherwise double-book). Narrow with
+Scans every transaction entity the publisher tags. It also scans four types the publisher
+never creates, so any of them in the window is inherently a direct record and always
+surfaces:
+
+  Deposit          a bank-feed or hand-keyed deposit.
+  Purchase         a directly-entered check, expense or credit-card charge.
+  SalesReceipt     a sale paid at the time it is made, posted straight in QuickBooks.
+  RefundReceipt    money paid back to a customer, posted straight in QuickBooks.
+
+A SalesReceipt and a RefundReceipt each post income and cash in one record. The bank half
+also arrives in the bank feed, so staging books its own entry for the same money. Without
+these two types in the scan, Publish adds a second income posting for a sale QuickBooks
+already holds, and the post-publish reconcile is the first thing to notice. Narrow with
 --entity_types when a client's workflow calls for it.
 
 READ-ONLY: no QBO writes; the local staging DB is opened read-only (sqlite mode=ro) solely to
@@ -125,7 +134,7 @@ from dotenv import load_dotenv
 # SDK entity classes — re-exported from the package top level (as qbo_client.py imports them).
 from quickbooks.objects import (
     JournalEntry, Invoice, Bill, CreditMemo, VendorCredit,
-    Payment, BillPayment, Deposit, Purchase,
+    Payment, BillPayment, Deposit, Purchase, SalesReceipt, RefundReceipt,
 )
 
 _config = config_loader.load_config()
@@ -135,8 +144,8 @@ load_dotenv(ENV_PATH)
 TAG_TOKEN = '[bk:'   # the publisher's idempotency-tag prefix (see _shared/locate.py)
 _PAGE_SIZE = 100
 
-# Entity types the publisher TAGS — a record here WITHOUT [bk: is a direct entry. Plus the two
-# direct-entry-prone types the publisher NEVER creates (Deposit, Purchase — always surfaced).
+# Entity types the publisher TAGS. A record here WITHOUT [bk: is a direct entry. The four
+# types after them the publisher never creates, so every one in the window is direct.
 TAGGED_BY_PUBLISHER = ('JournalEntry', 'Invoice', 'Bill', 'CreditMemo',
                        'VendorCredit', 'Payment', 'BillPayment')
 ENTITY_MAP = {
@@ -147,8 +156,10 @@ ENTITY_MAP = {
     'VendorCredit': VendorCredit,
     'Payment': Payment,
     'BillPayment': BillPayment,
-    'Deposit': Deposit,      # never created by the publisher
-    'Purchase': Purchase,    # never created by the publisher
+    'Deposit': Deposit,              # never created by the publisher
+    'Purchase': Purchase,            # never created by the publisher
+    'SalesReceipt': SalesReceipt,    # never created by the publisher
+    'RefundReceipt': RefundReceipt,  # never created by the publisher
 }
 
 # A local trade_account.type identifies the QBO entity its external_id refers to. The link
