@@ -216,9 +216,9 @@ def locate_posted_object(
         if locator.get('txn_date'):
             clauses.append(f"TxnDate = '{locator['txn_date']}'")
         if locator.get('total') is not None:
-            # The quotes are required. QuickBooks rejects an unquoted amount with
-            # Validation Exception 4000 and accepts the quoted one in either the
-            # one-decimal or the two-decimal spelling. Measured 2026-09-21 against a
+            # The quotes are required. An unquoted amount comes back as Validation
+            # Exception 4000. A quoted one finds the payment in the one-decimal
+            # spelling and in the two-decimal spelling. Measured 2026-09-21 against a
             # live company.
             clauses.append(f"TotalAmt = '{locator['total']}'")
     if not clauses:
