@@ -2,7 +2,7 @@
 
 Unified analytical procedures for the Review domain. All checks are read-only — no database writes. The agent runs each check, reasons about the results using business context (company overview, prior period data, materiality), and records findings to the workpaper.
 
-Checks 1 through 11 read the staging database. Check 12 reads the system of record, which is the only place its question can be answered. Check 13 is the local extensibility hook.
+Checks 1 through 11 read the staging database. Check 12 reads the system of record. Check 13 is the local extensibility hook.
 
 ## Checks
 
@@ -86,19 +86,19 @@ Suppress only the **specific** known exceptions listed in `review-notes.md`; don
 
 ### 12. Unclassed P&L Activity (system of record)
 
-**Intent:** The client reads "Profit and Loss by Class" in the system of record. Money sitting in that report's unclassed column belongs to no class, and the client sees it. The staging database cannot answer this. A record adopted from the SoR during a close carries a class on the local row while the SoR original has none, so the local side reads clean and the client's report is still wrong. A record staging never created carries no class at all.
+**Intent:** The client reads the SoR's "Profit and Loss by Class", and money in its unclassed column belongs to no class. Staging cannot answer it: a record adopted during a close carries a class locally while the SoR original has none, and a record staging never created carries none at all.
 
-**Skip when the client does not use classes.** Every P&L line is then in that column and there is nothing to resolve. Classes in use is a client fact; `review-notes.md` records it.
+**Skip when the client does not use classes.** Every P&L line is then in that column. `review-notes.md` records which clients use them.
 
-**Preconditions:** SoR credentials. For QBO that is the OAuth block in `{local_dir}/adapters/.env`, the same one `reconcile_trial_balance.py` and `scan_sor_direct_records.py` use. Review needs no credential for any other check, so on a client where the SoR is not reachable this one cannot run; record that rather than reading its failure as a clean result.
+**Preconditions:** SoR credentials, the only Review check that needs any. For QBO, the OAuth block in `{local_dir}/adapters/.env`. Where the SoR is unreachable, record that as the result.
 
-**Script:** `adapters/qbo/scan_unclassed_pl.py --period_start {periodStart} --period_end {periodEnd}` for QBO. Read-only against the books: two report reads, no SoR writes, no local database. It reads ProfitAndLoss summarized by Classes on the accrual basis, and ProfitAndLossDetail with its class column, and the two must agree or the script fails rather than answer. Exit 1 also means the scan itself failed, so read `success` and `error` before reading the exit code.
+**Script:** `adapters/qbo/scan_unclassed_pl.py --period_start {periodStart} --period_end {periodEnd}` for QBO. It reads two reports that have to agree, and fails saying so when they disagree. Read `success` and `error` as well as the exit code.
 
-**Flag when:** any account carries activity in the unclassed column. The finding lists each account with its amount and each transaction with its date, type, document number, counterparty and SoR id.
+**Flag when:** any account carries activity in the unclassed column. The finding names each account and amount, and each transaction with its date, type, document number, counterparty and SoR id.
 
-**What to record:** the flagged transactions, and for each the class the staging row holds where there is one. Review is read-only analysis and a correction made here is a system failure (Hard Stop 4), so the fix is not made in this domain. The class is stamped on the SoR record, which is a Publish-domain correction on the next run through, and a locked period routes through the user. Reclassifying locally would correct the wrong side where the staging row is already right. A record staging never created has no staging row to take a class from; adopt it first, and note that adopting it clears Hard Stop 7 and leaves the class off.
+**What to record:** the flagged transactions, and the class the staging row holds for each. A correction made in Review is a system failure under Hard Stop 4, so the stamp goes on the SoR record on the next Publish pass, and a locked period routes through the user. A record staging never created has no class to take; adopt it first, and adopting alone leaves the class off.
 
-This is a flag, not a Hard Stop. The gates that must clear before a period closes are listed in `quality-guidelines.md`, and this is not one of them.
+A firm that wants this check to stop a close says so in its firm files.
 
 ### 13. Additional Local Steps
 
