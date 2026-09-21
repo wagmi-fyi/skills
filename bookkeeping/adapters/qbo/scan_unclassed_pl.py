@@ -16,13 +16,28 @@ clean and QuickBooks is still wrong.
 
 ## What it reads
 
-The ProfitAndLoss report summarized by Classes, on the accrual basis, which is the basis
-the local ledger keeps. Any class column QuickBooks labels as the no-class bucket
-("Not Specified", "Unclassified", or blank) with activity in it is a finding. Reading the
-report rather than counting transactions means the answer matches what the client sees.
+Two reports, both on the accrual basis, which is the basis the local ledger keeps.
 
-Each offending transaction is then named from ProfitAndLossDetail with its class column,
-so the finding says which records to fix.
+ProfitAndLoss summarized by Classes gives the column the client sees. The no-class column
+is found by its title ("Not Specified", "Unclassified", "No Class", or blank), never by its
+position. A title match survives a column moving. It does not survive a relabel, and a
+client may also name a real class one of those words, so the second report is what makes
+the answer safe.
+
+ProfitAndLossDetail with its class column names every transaction whose class is empty.
+
+## The tie-out
+
+The two reports have to agree that there is unclassed activity, or that there is none. A
+disagreement means the column lookup found the wrong column, or missed the right one, or
+fired on a real class a client happened to name "Unclassified". The scan raises rather than
+answer, because both failure directions are silent: one reports a client's properly classed
+money as a fault, the other reports a clear gate over money with no class.
+
+Their amounts are reported side by side with `totals_agree`, and a difference does not fail
+the run. An account row aggregates transactions of both signs, so the two sums are not
+required to match line for line, and the sign conventions of the two reports have not been
+checked against a live company.
 
 ## Gate semantics
 
@@ -34,11 +49,13 @@ reference/review-checks.md, Check 12.
 The fix is to stamp the class on the QuickBooks record. The staging row already holds the
 right class, so reclassifying locally would change the wrong side.
 
-READ-ONLY: two report reads, no QuickBooks writes, no local database access.
+READ-ONLY against the books: two report reads, no QuickBooks writes, no local database. It
+does write `{local_dir}/adapters/.env` when the shared client rotates an OAuth token, which
+is the housekeeping every QBO adapter here does.
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
-      uv run --with-requirements {module_root}/requirements.txt \
+      uv run --no-project --with-requirements {module_root}/requirements.txt \
       {module_root}/adapters/qbo/scan_unclassed_pl.py \
       --period_start 2026-07-19 --period_end 2026-08-15
 """
@@ -66,8 +83,9 @@ _config = config_loader.load_config()
 ENV_PATH = os.path.join(_config['local_dir'], 'adapters', '.env')
 load_dotenv(ENV_PATH)
 
-# QuickBooks labels the no-class bucket differently across report versions and locales.
-# Match on a normalized form so a relabel upstream does not turn the gate green.
+# QuickBooks labels the no-class bucket differently across report versions and locales. A
+# label outside this set reads as no unclassed column at all, which the detail report then
+# contradicts, so the tie-out catches it.
 UNCLASSED_LABELS = {'not specified', 'unclassified', 'no class', ''}
 
 # The local ledger is accrual, so the report is read on that basis. Leaving it to the
@@ -97,15 +115,20 @@ def walk_data_rows(rows, fn):
             fn(row['ColData'])
 
 
-def parse_amount(raw):
-    """Report money as a float, or None when the cell holds no number."""
+def parse_amount(raw, where):
+    """Report money as a float, or None when the cell is empty.
+
+    An empty cell means no activity. A cell holding something that is not a number means
+    the report is not the shape this script reads, so it raises. Reading it as no activity
+    would drop the row out of the finding without a word.
+    """
     text = (raw or '').replace(',', '').strip()
     if not text:
         return None
     try:
         return float(text)
     except ValueError:
-        return None
+        raise RuntimeError(f"{where}: cannot read {text!r} as an amount")
 
 
 def find_unclassed_column(report):
@@ -125,13 +148,20 @@ def find_unclassed_column(report):
 
 
 def unclassed_by_account(report, index):
-    """Every account with activity in the no-class column."""
+    """Every account with activity in the no-class column.
+
+    A leaf account row carries the account's QuickBooks id in its first cell, and a report
+    row that carries no id is a total or a label. reconcile_trial_balance.py reads the same
+    report family the same way. Without the id test a top-level "Net Income" row counts as
+    an account and its money is added to the column a second time.
+    """
     found = []
 
     def collect(col_data):
-        if len(col_data) <= index:
+        if len(col_data) <= index or not col_data[0].get('id'):
             return
-        amount = parse_amount(col_data[index].get('value'))
+        amount = parse_amount(col_data[index].get('value'),
+                              'ProfitAndLoss, account ' + (col_data[0].get('value') or '?'))
         if amount is None or abs(amount) < CENT:
             return
         found.append({'account': col_data[0].get('value', ''),
@@ -165,7 +195,9 @@ def unclassed_records(report):
             return
         if (col_data[class_at].get('value') or '').strip():
             return
-        amount = parse_amount(cell(col_data, 'subt_nat_amount'))
+        amount = parse_amount(cell(col_data, 'subt_nat_amount'),
+                              'ProfitAndLossDetail, transaction '
+                              + (cell(col_data, 'doc_num') or cell(col_data, 'tx_date') or '?'))
         if amount is None or abs(amount) < CENT:
             return
         date_at = index.get('tx_date')
@@ -185,7 +217,7 @@ def unclassed_records(report):
 
 
 def scan(client, period_start, period_end):
-    """Read both reports and return the result the caller prints."""
+    """Read both reports, tie them out, and return the result the caller prints."""
     summary_report = client.get_report('ProfitAndLoss', qs={
         'start_date': period_start,
         'end_date': period_end,
@@ -198,28 +230,40 @@ def scan(client, period_start, period_end):
                      for c in summary_report.get('Columns', {}).get('Column', [])]
 
     accounts = unclassed_by_account(summary_report, index) if index is not None else []
-    total = round(sum(a['amount'] for a in accounts), 2)
 
-    records = []
-    if accounts:
-        detail_report = client.get_report('ProfitAndLossDetail', qs={
-            'start_date': period_start,
-            'end_date': period_end,
-            'columns': DETAIL_COLUMNS,
-            'accounting_method': ACCOUNTING_METHOD,
-        })
-        records = unclassed_records(detail_report)
+    detail_report = client.get_report('ProfitAndLossDetail', qs={
+        'start_date': period_start,
+        'end_date': period_end,
+        'columns': DETAIL_COLUMNS,
+        'accounting_method': ACCOUNTING_METHOD,
+    })
+    records = unclassed_records(detail_report)
+
+    account_total = round(sum(a['amount'] for a in accounts), 2)
+    record_total = round(sum(r['amount'] for r in records), 2)
+
+    if bool(accounts) != bool(records):
+        raise RuntimeError(
+            f"the two reports disagree for {period_start}..{period_end}. "
+            f"ProfitAndLoss by Class found {len(accounts)} account(s) in the "
+            f"{label!r} column and ProfitAndLossDetail found {len(records)} "
+            f"transaction(s) with an empty class. The class columns are "
+            f"{class_columns}. Either the column lookup took a real class for the "
+            f"no-class bucket, or QuickBooks labels that bucket with a title this "
+            f"scan does not know.")
 
     clear = not accounts
     if clear:
         summary = (f"CLEAR. No unclassed P&L activity in {period_start}..{period_end}. "
-                   f"Profit and Loss by Class shows no unclassed column.")
+                   f"Profit and Loss by Class has no unclassed column, and no "
+                   f"transaction in the period has an empty class.")
     else:
-        summary = (f"UNCLASSED P&L ACTIVITY. {len(accounts)} account(s) totalling "
-                   f"{total:,.2f} sit in the '{label}' column for "
-                   f"{period_start}..{period_end}, and the client sees them on Profit and "
-                   f"Loss by Class. Stamp the class on the QuickBooks record. The staging "
-                   f"row already holds the right class.")
+        summary = (f"UNCLASSED P&L ACTIVITY. {len(accounts)} account(s) and "
+                   f"{len(records)} transaction(s) carry no class in "
+                   f"{period_start}..{period_end}, and the client sees them in the "
+                   f"'{label}' column of Profit and Loss by Class. The column reads "
+                   f"{account_total:,.2f} as the report renders it. Stamp the class on "
+                   f"the QuickBooks record.")
 
     return {
         'success': clear,
@@ -227,9 +271,12 @@ def scan(client, period_start, period_end):
         'accounting_method': ACCOUNTING_METHOD,
         'class_columns': class_columns,
         'unclassed_column': label,
-        'unclassed_total': total,
+        'unclassed_account_count': len(accounts),
+        'unclassed_account_total': account_total,
         'unclassed_by_account': sorted(accounts, key=lambda a: -abs(a['amount'])),
         'unclassed_record_count': len(records),
+        'unclassed_record_total': record_total,
+        'totals_agree': account_total == record_total,
         'unclassed_records': records,
         'summary': summary,
     }
@@ -256,6 +303,13 @@ def main():
             print(json.dumps({'success': False,
                               'error': f"{label} must be YYYY-MM-DD, got {value!r}"}))
             return 1
+
+    if args.period_start > args.period_end:
+        print(json.dumps({'success': False,
+                          'error': f"period_start {args.period_start} is after period_end "
+                                   f"{args.period_end}; QuickBooks answers an inverted "
+                                   f"window with an empty report, which reads as clear"}))
+        return 1
 
     log = lambda message: print(message, file=sys.stderr)
     log(f"Unclassed P&L scan {args.period_start}..{args.period_end}")
