@@ -2,9 +2,10 @@
 """The window between a QuickBooks create and the staging save (NO real QBO calls).
 
 The publisher creates the QuickBooks object, then writes its id into staging. The phase
-used to save the database once at the end, so a crash lost the ids of every object that had
-already posted and the next run created each one again. Each row's outcome is saved before
-the next row reaches QuickBooks now, so a crash costs the one object in flight.
+saved the database once at the end until this change, so a crash lost the ids of every
+object that had already posted and the next run created each one again. What each turn of
+the loop did now reaches the database before the next one reaches QuickBooks. A crash
+therefore costs the one object in flight.
 
 Closing that last one needs a record of the intent written before the create, which is a
 unit of its own. Two tests cover it: one passes and pins what the publisher does today, and
