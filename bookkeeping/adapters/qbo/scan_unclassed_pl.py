@@ -82,7 +82,7 @@ from _shared.client import (
 )
 from dotenv import load_dotenv
 
-# SDK entity class — re-exported from the package top level (as qbo_client.py imports it).
+# One SDK entity class, taken from the package top level, as qbo_client.py takes its own.
 from quickbooks.objects import Preferences
 
 _config = config_loader.load_config()
