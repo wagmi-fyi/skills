@@ -7,8 +7,9 @@ Covers adapters/qbo/scan_sor_direct_records.py:
   * The entity map. Every name maps to the SDK class of that name, and the types the
     publisher never creates are absent from TAGGED_BY_PUBLISHER, which is what makes each
     one surface as a direct record.
-  * SalesReceipt and RefundReceipt. Each posts income and cash in one record, the publisher
-    creates neither, and no local row type can vouch for one, so each always surfaces.
+  * SalesReceipt and RefundReceipt driven through classify_record, which is the decision
+    the scan makes per record. An untagged one lands in the gate, a voided one does not,
+    and no local link can claim either, because no trade-account type maps to them.
   * has_bk_tag over both places the publisher stamps the tag.
   * is_voided_benign, including the paid record that reads Balance 0 and is not voided.
   * load_local_links, whose link check is type-aware because a QuickBooks id is unique only
@@ -240,8 +241,13 @@ class TagAndVoidTests(unittest.TestCase):
         self.assertFalse(self.scan.has_bk_tag(_Record()))
 
     def test_a_voided_receipt_is_benign(self):
-        self.assertTrue(self.scan.is_voided_benign(
-            _Record(PrivateNote='Voided', TotalAmt=0, Balance=0, LinkedTxn=None)))
+        for name in ('SalesReceipt', 'RefundReceipt'):
+            record = self.scan.ENTITY_MAP[name]()
+            record.PrivateNote = 'Voided'
+            record.TotalAmt = 0
+            record.Balance = 0
+            record.LinkedTxn = None
+            self.assertTrue(self.scan.is_voided_benign(record), name)
 
     def test_a_voided_record_with_no_balance_field_is_benign(self):
         """Balance is absent on some types. Absent means nothing outstanding."""
@@ -266,6 +272,81 @@ class TagAndVoidTests(unittest.TestCase):
     def test_a_marked_record_still_carrying_an_amount_is_not_a_void(self):
         self.assertFalse(self.scan.is_voided_benign(
             _Record(PrivateNote='Voided', TotalAmt=250.00, Balance=0, LinkedTxn=None)))
+
+
+@unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
+class ClassifyRecordTests(unittest.TestCase):
+    """The decision the scan makes for each record it pulls."""
+
+    def setUp(self):
+        self.scan = _load_module()
+
+    def _receipt(self, name, **fields):
+        record = self.scan.ENTITY_MAP[name]()
+        record.Id = fields.pop('Id', '4021')
+        record.TxnDate = fields.pop('TxnDate', '2026-08-14')
+        record.TotalAmt = fields.pop('TotalAmt', 250.00)
+        record.PrivateNote = fields.pop('PrivateNote', '')
+        record.DocNumber = fields.pop('DocNumber', '')
+        record.LinkedTxn = fields.pop('LinkedTxn', None)
+        for key, value in fields.items():
+            setattr(record, key, value)
+        return record
+
+    def test_a_direct_sales_receipt_reaches_the_gate(self):
+        """The publisher never creates one, so an untagged SalesReceipt in the window is a
+        direct entry and nothing suppresses it."""
+        bucket, rec = self.scan.classify_record(
+            self._receipt('SalesReceipt', PrivateNote='Counter sale'),
+            'SalesReceipt', {})
+        self.assertEqual(bucket, 'untagged')
+        self.assertEqual(rec['type'], 'SalesReceipt')
+        self.assertEqual(rec['id'], '4021')
+        self.assertEqual(rec['txn_date'], '2026-08-14')
+        self.assertEqual(rec['amount'], 250.00)
+        self.assertEqual(rec['name_or_memo'], 'Counter sale')
+
+    def test_a_direct_refund_receipt_reaches_the_gate(self):
+        bucket, rec = self.scan.classify_record(
+            self._receipt('RefundReceipt', Id='4022', TotalAmt=40.00),
+            'RefundReceipt', {})
+        self.assertEqual(bucket, 'untagged')
+        self.assertEqual(rec['amount'], 40.00)
+
+    def test_a_voided_sales_receipt_does_not_gate(self):
+        bucket, rec = self.scan.classify_record(
+            self._receipt('SalesReceipt', PrivateNote='Voided', TotalAmt=0, Balance=0),
+            'SalesReceipt', {})
+        self.assertEqual(bucket, 'voided')
+        self.assertEqual(rec['void_marker'], 'Voided')
+
+    def test_a_same_numbered_link_of_another_type_does_not_claim_a_receipt(self):
+        """A QuickBooks id is unique only within its entity type. The links passed in are
+        already narrowed to the type being scanned, and no trade-account type maps to a
+        receipt, so that map is always empty for one."""
+        links = self._links_for_invoices()
+        bucket, _ = self.scan.classify_record(
+            self._receipt('SalesReceipt', Id='1055'), 'SalesReceipt',
+            links.get('SalesReceipt', {}))
+        self.assertEqual(bucket, 'untagged')
+
+    def _links_for_invoices(self):
+        path = _make_db(trade_accounts=[('TA1', 'receivable', '1055', 'synced', None)])
+        self.addCleanup(os.remove, path)
+        return self.scan.load_local_links(path)
+
+    def test_a_tagged_record_needs_no_row(self):
+        bucket, rec = self.scan.classify_record(
+            self._receipt('SalesReceipt', PrivateNote='[bk:abc123]'), 'SalesReceipt', {})
+        self.assertEqual(bucket, 'tagged')
+        self.assertIsNone(rec)
+
+    def test_a_linked_record_is_reported_and_does_not_gate(self):
+        bucket, rec = self.scan.classify_record(
+            self._receipt('Invoice', Id='1055'), 'Invoice',
+            {'1055': {'trade_accounts(receivable)'}})
+        self.assertEqual(bucket, 'linked')
+        self.assertEqual(rec['linked_via'], 'trade_accounts(receivable)')
 
 
 @unittest.skipUnless(QBO_SDK_PRESENT, SOR_SKIP_REASON)
