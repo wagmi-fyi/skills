@@ -360,7 +360,6 @@ class FindUnclassedColumnTests(unittest.TestCase):
 class ScanTests(unittest.TestCase):
 
     CLASSES = [('Delivery', '5000000001'), ('Not Specified', 'not_specified')]
-    TITLES = ['', 'Delivery', 'Not Specified', 'Total']
 
     def setUp(self):
         self.scan = _load_module()
@@ -389,7 +388,10 @@ class ScanTests(unittest.TestCase):
             classes=[('Delivery', '5000000001'), ('Retail', '5000000002')])
 
         self.assertTrue(result['success'])
+        self.assertTrue(result['class_tracking'])
         self.assertIsNone(result['unclassed_column'])
+        self.assertEqual(result['unclassed_account_count'], 0)
+        self.assertEqual(result['unclassed_record_count'], 0)
         self.assertEqual(result['unclassed_by_account'], [])
         self.assertEqual(result['unclassed_records'], [])
         self.assertIn('CLEAR', result['summary'])
@@ -437,7 +439,7 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(result['unclassed_by_account'],
                          [{'account': 'Consulting Income', 'amount': 250.00},
                           {'account': 'Software Subscriptions', 'amount': 40.00}])
-        self.assertEqual(result['class_columns'], self.TITLES)
+        self.assertEqual(result['class_columns'], ['Delivery'])
         self.assertEqual(result['unclassed_record_count'], 2)
         self.assertEqual(
             result['unclassed_records'][0],
@@ -462,6 +464,27 @@ class ScanTests(unittest.TestCase):
         self.assertEqual([a['account'] for a in result['unclassed_by_account']],
                          ['Sales Discounts', 'Consulting Income'])
         self.assertEqual(result['unclassed_account_total'], -310.00)
+
+    def test_class_columns_names_the_classes_and_nothing_else(self):
+        """A reader takes the key at its word. The account column, the total column and
+        the no-class column name no class."""
+        result = self._one_finding(
+            [account_row('40', 'Consulting Income', '0.00', '0.00', '250.00', '250.00')],
+            classes=[('Delivery', '5000000001'), ('Retail', '5000000002'),
+                     ('Not Specified', 'not_specified')])
+        self.assertEqual(result['class_columns'], ['Delivery', 'Retail'])
+
+    def test_class_columns_on_a_company_with_no_unclassed_column(self):
+        """Nothing was unclassed in the period, so QuickBooks emits no such column and
+        there is no index to skip."""
+        result = self._one_finding(
+            [account_row('40', 'Consulting Income', '1000.00', '500.00', '1500.00')],
+            detail_rows=[under_group('Income', under_account(
+                '40', 'Consulting Income',
+                detail_row('7001', '2026-08-04', 'Invoice', '1042', 'Northwind Supply',
+                           '', 'Delivery', '1000.00')))],
+            classes=[('Delivery', '5000000001'), ('Retail', '5000000002')])
+        self.assertEqual(result['class_columns'], ['Delivery', 'Retail'])
 
     # ---------------- the account a transaction posts to ----------------
 

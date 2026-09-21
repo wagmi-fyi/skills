@@ -199,6 +199,21 @@ def find_unclassed_column(report):
     return None, None
 
 
+def class_column_titles(report, unclassed_at):
+    """The titles of the columns that name a class.
+
+    Column 0 holds the account name and the last column is the row total, which are the
+    two find_unclassed_column skips. The no-class column names no class either.
+    """
+    titles = []
+    for i, column in enumerate(report.get('Columns', {}).get('Column', [])):
+        title = column.get('ColTitle') or ''
+        if i == 0 or i == unclassed_at or title.strip().lower() == 'total':
+            continue
+        titles.append(title)
+    return titles
+
+
 def unclassed_by_account(report, index):
     """Every account with activity in the no-class column.
 
@@ -280,8 +295,7 @@ def scan(client, period_start, period_end):
         })
 
         index, label = find_unclassed_column(summary_report)
-        class_columns = [(c.get('ColTitle') or '')
-                         for c in summary_report.get('Columns', {}).get('Column', [])]
+        class_columns = class_column_titles(summary_report, index)
         accounts = unclassed_by_account(summary_report, index) if index is not None else []
 
         detail_report = client.get_report('ProfitAndLossDetail', qs={
