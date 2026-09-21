@@ -598,7 +598,9 @@ def find_bank_funded_payment_gaps(
     A bank-funded TAP (source_ta_id NULL, import_id set) reaches QBO through exactly two
     selections: query_trade_account_payments, once per parent type, and
     query_payout_consumed_credits. A row neither one takes stays pending and no count
-    includes it. The run still reports success. The publish completeness rule in
+    includes it. The run still reports success. Both selections read the one sync status
+    this run was given, so a sibling row in another status changes which of them takes a
+    row without being one itself. The publish completeness rule in
     reference/quality-guidelines.md calls that a failure, so this turns it into a stop.
 
     The gaps, each in the publisher's error form:
@@ -611,6 +613,12 @@ def find_bank_funded_payment_gaps(
     holds. The credit and the invoices it reduces would land in different groups, so the
     invoices would post at gross and the bank would be over by the credit. The data does not
     say which key is right, so the run stops and a person decides.
+
+    DEPOSIT_CREDIT_OFF_STATUS means a bank-funded invoice row this run would publish shares
+    a deposit key with a credit memo's payment row in a sync status this run does not read.
+    Both consumed-credit SQL sites read one status, so that credit is invisible to them and
+    the invoices come back on the gross singleton path. This test reads the credit rows in
+    every status.
 
     Every code in CONSUMED_CREDIT_REFUSALS is a gap too. check_consumed_credit_group tests
     them, and the publisher calls the same function, so a clean report means the
@@ -687,6 +695,39 @@ def find_bank_funded_payment_gaps(
                         f"contact as a consumed-credit deposit keyed on import {import_id}, "
                         f"but it is keyed differently, so it sits outside the group. The "
                         f"credit and the invoices it reduces must share one key.")})
+
+    # Both consumed-credit SQL sites read one sync status, so a credit memo's payment row in
+    # any other status leaves its invoices on the singleton path and no test above sees it.
+    # The invoices would post at full face and the bank would be over by the credit. This
+    # test reads the credit rows whatever status they carry, and names the invoice rows.
+    # A row whose invoices are published already is not eligible, so a book repaired by the
+    # recipe in gotchas.md stays clean.
+    key = deposit_group_key('ta', 'tap')
+    cm_key = deposit_group_key('cmta', 'cmtap')
+    off_status = {}
+    for tap_id, cm_tap_id, cm_status in cursor.execute(f"""
+        SELECT tap.id, cmtap.id, json_extract(cmtap.sync, '$.status')
+        FROM trade_account_payments tap
+        INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
+        INNER JOIN trade_account_payments cmtap ON cmtap.source_ta_id IS NULL
+          AND cmtap.import_id IS NOT NULL
+        INNER JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
+          AND cmta.type = 'credit_memo' AND cmta.voided_at IS NULL
+        WHERE ta.type = 'receivable' AND {" AND ".join(where)} AND {cm_key} = {key}
+        ORDER BY tap.id, cmtap.id
+    """, params).fetchall():
+        if cm_tap_id not in selected_consumed and tap_id not in off_status:
+            off_status[tap_id] = (cm_tap_id, cm_status)
+    for tap_id, (cm_tap_id, cm_status) in sorted(off_status.items()):
+        gaps.append({
+            'payment_id': tap_id,
+            'error_code': 'DEPOSIT_CREDIT_OFF_STATUS',
+            'error_message': (
+                f"Bank-funded payment {tap_id} pays an invoice on a bank line whose credit "
+                f"memo payment {cm_tap_id} carries sync status {cm_status!r}, which this run "
+                f"does not publish. The invoice would post at full face and the bank would "
+                f"be over by the credit. Put the credit row in this run's status, or publish "
+                f"the invoices in the status the credit row carries.")})
 
     # The gate tests each group with the function the publisher uses. The selection carries
     # no date window, so the gate tests only a group that holds a row this run would publish.
