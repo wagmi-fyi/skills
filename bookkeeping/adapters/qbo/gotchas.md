@@ -55,6 +55,21 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   one key, then run again. A row no metadata change can route has no remedy in the skill
   today, and that book publishes no bank-funded payments until the row is dealt with. Raise it.
 
+- **A credit memo's payment row in another sync status holds back the payment phases.**
+  Both consumed-credit queries read the one status the run was given, so a credit row in any
+  other status is invisible to them and its invoices come back on the gross singleton path.
+  `DEPOSIT_CREDIT_OFF_STATUS` names each invoice row before it posts, and the message carries
+  the credit row's id and status. Put the credit row in the run's status, or publish the
+  invoices in the status the credit row carries. A book already repaired by the recipe below
+  is quiet: its invoices are published, so no run selects them.
+
+- **A run that dies can still re-post the one payment it was in the middle of.** Each payment
+  is saved as it publishes, so a crash costs that payment and no others. The one in flight
+  had reached QuickBooks without its id reaching staging, and the next run posts it again.
+  `scan_sor_direct_records.py` does not see such a duplicate, because it carries the `[bk:]`
+  tag like any published object. After a run that is known to have died, search QuickBooks
+  for the tag of the last deposit the run reported and check it posted once.
+
 - **A book whose invoices already posted at full face shows one credit memo in
   `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit, the
   CreditMemo floats at `RemainingCredit` equal to its face, and its payment row is still pending.
