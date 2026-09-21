@@ -17,7 +17,7 @@ Covers adapters/qbo/scan_sor_direct_records.py:
   * query_window, which pages to exhaustion so a truncated page cannot read as clean.
 
 Run:
-    python3 -m unittest scripts.tests.test_qbo_scan_sor_direct_records
+    uv run --no-project --with-requirements requirements.txt python3 -m unittest scripts.tests.test_qbo_scan_sor_direct_records
 """
 
 import json
