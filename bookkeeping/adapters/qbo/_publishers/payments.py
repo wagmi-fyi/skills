@@ -426,8 +426,8 @@ def publish_payout_consumed_credits(
     invoice-collection TAPs are GROSS (full invoice face) and a separate bank-funded
     CM-consume TAP (parent type=credit_memo) carries the credit. A batching channel
     (e.g. Shopify) settling a chargeback inside a payout is the same shape. Emit ONE
-    consolidated mixed-Line Payment per deposit — TotalAmt = SUM(gross R) - SUM(CM),
-    Line = N Invoice (face) + M CreditMemo — so the bank nets and the CM applies
+    consolidated mixed-Line Payment per deposit, with TotalAmt = SUM(gross R) - SUM(CM) and
+    Line = N Invoice (face) + M CreditMemo, so the bank nets and the CM applies
     (Balance 0). Detection and grouping live in common.query_payout_consumed_credits,
     on common.deposit_group_key; the rows are made disjoint from publish_payments'
     singleton/settlement path by the NOT EXISTS clause in query_trade_account_payments,
@@ -458,8 +458,8 @@ def publish_payout_consumed_credits(
         groups[row['group_key']].append(row)
 
     for group_key, group in groups.items():
-        # The group-level refusals live in common.check_consumed_credit_group, which the
-        # pre-publish gate calls too. One function, one answer, whoever asks.
+        # The group-level refusals live in common.check_consumed_credit_group. The publisher
+        # and the gate call the same function.
         refusal = check_consumed_credit_group(conn, group_key, group)
         if refusal:
             code, err_msg = refusal
@@ -467,9 +467,8 @@ def publish_payout_consumed_credits(
                 errors.append({'payment_id': r['tap_id'], 'error_code': code,
                                'error_message': err_msg})
                 update_sync_error(conn, 'trade_account_payments', r['tap_id'], code)
-            # A code the table does not carry counts as failed: an unpriceable group is not
-            # something to retry quietly, and a KeyError here would stop a run mid-way with
-            # earlier groups already posted.
+            # A group with an unknown refusal code counts as failed. A KeyError here would
+            # stop a run mid-way with earlier groups already posted.
             if CONSUMED_CREDIT_REFUSALS.get(code, 'failed') == 'failed':
                 failed += len(group)
             else:
@@ -503,8 +502,8 @@ def publish_payout_consumed_credits(
             skipped += 1
             continue
 
-        # Aggregate Lines per QBO TxnId. R-TAPs are GROSS (full invoice face); the CM is NOT
-        # pre-attributed to any invoice — it nets the cash at the deposit level. So each Invoice
+        # Aggregate Lines per QBO TxnId. R-TAPs are GROSS (full invoice face). The CM is NOT
+        # pre-attributed to any invoice. It nets the cash at the deposit level. So each Invoice
         # Line = SUM of that invoice's R-TAP face, and deposit (cash) = SUM Invoice - SUM CM.
         invoice_amounts = defaultdict(int)   # invoice external_id -> cents (face)
         for r in inv_rows:
@@ -604,8 +603,8 @@ def publish_payout_consumed_credits(
         external_ids.append(ext_id)
         processed += len(group)
 
-        # Mark the deposit's clearing JE(s) sync='ignore' — the QBO Payment carries the same
-        # accounting (the local clearing JE already nets the bank).
+        # Mark the deposit's clearing JE(s) sync='ignore'. The QBO Payment carries the same
+        # accounting, since the local clearing JE already nets the bank.
         clearing_je_ids = {_meta(r).get('clearing_je_id') for r in group}
         for cje in clearing_je_ids:
             if cje:
