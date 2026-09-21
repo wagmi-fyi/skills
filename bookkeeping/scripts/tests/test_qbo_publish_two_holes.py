@@ -310,6 +310,51 @@ class SyncStatusComplementarityTests(unittest.TestCase):
 
 
 @unittest.skipUnless(cc.QBO_SDK_PRESENT, cc.SOR_SKIP_REASON)
+class HalfPostedDepositTests(unittest.TestCase):
+    """Which refusal a deposit gets when its invoices published and its credit did not."""
+
+    def setUp(self):
+        cc._load_modules()
+        self.conn, self.path = cc.make_temp_db()
+
+    def tearDown(self):
+        self.conn.close()
+        os.remove(self.path)
+
+    def _refusals(self):
+        groups = {}
+        for row in cc.common.query_payout_consumed_credits(self.conn, 'pending'):
+            groups.setdefault(row['group_key'], []).append(row)
+        return [cc.common.check_consumed_credit_group(self.conn, key, group)
+                for key, group in groups.items()]
+
+    def test_a_half_posted_deposit_is_named_half_posted(self):
+        """The invoices published at full face and the credit row is still waiting. The
+        group holds that one row, so counting members calls it incomplete and sends a
+        person looking for an invoice that was never missing. It is half posted, which is
+        what the repair recipe in gotchas.md answers."""
+        _, taps = cc.build_deposit(self.conn, {})
+        for role in ('R1', 'R2'):
+            _set_sync(self.conn, taps[role], 'synced', external_id='QBO-PMT-1')
+
+        self.assertEqual([r[0] for r in self._refusals()], ['PAYOUT_PARTIALLY_PUBLISHED'])
+
+    def test_a_credit_with_no_invoice_of_its_own_is_still_incomplete(self):
+        """Nothing on this bank line has published. The credit memo's customer has no
+        invoice here, so the group is incomplete and keeps that name."""
+        import_id = cc.insert_import(self.conn, 50000)
+        inv_ta = cc.insert_ta(self.conn, 'receivable', 60000, 'INV-A', {},
+                              contact='Northwind Supply')
+        cm_ta = cc.insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {},
+                             contact='Dockside Freight')
+        cc.insert_tap(self.conn, inv_ta, 60000, import_id=import_id)
+        cc.insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        self.conn.commit()
+
+        self.assertEqual([r[0] for r in self._refusals()], ['PAYOUT_GROUP_INCOMPLETE'])
+
+
+@unittest.skipUnless(cc.QBO_SDK_PRESENT, cc.SOR_SKIP_REASON)
 class CreateThenRecordTests(unittest.TestCase):
     """Hole 2: the window between the QuickBooks create and the staging save."""
 
