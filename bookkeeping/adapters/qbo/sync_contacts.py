@@ -13,6 +13,7 @@ A contact whose name is blank or whitespace is refused and reported under
 "refused". Contacts are auto-created from whatever name a posting carries, so a
 source row with an empty payee makes one. QuickBooks has no name for such a
 party, and the dual-use split would repoint ledger rows onto " (Vendor)".
+Guarding the creation sites is the fix; this refusal holds until then.
 
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
@@ -155,7 +156,7 @@ BLANK_NAME_REMEDY = ('set a name on the rows that point at this contact, then re
 
 
 def blank_name_refusal(contact: Dict, reason: str) -> Dict:
-    """A refusal an operator can act on: what it is, why, and where its rows are."""
+    """A refusal an operator can act on, with the rows that point at the contact."""
     return {
         'contact': contact['name'], 'reason': reason,
         'ar_postings': contact['ar_postings'], 'ap_postings': contact['ap_postings'],
@@ -347,10 +348,9 @@ def sync_contacts(client, rate_limiter, conn: sqlite3.Connection, dry_run: bool)
 
         if is_blank_name(name):
             # QuickBooks has no name for this party, so nothing is created for it and it
-            # counts as skipped. A contact QuickBooks already holds is done, and there is
-            # nothing this run can fix, so it is not refused; that is what it did before.
-            # A dual-use blank contact was refused by the split above and gets no second
-            # entry.
+            # counts as skipped. A contact QuickBooks already holds is done, and a re-run
+            # changes nothing, so it passes through as it always did. A dual-use blank
+            # contact was refused by the split above and gets no second entry.
             result['skipped'] += 1
             if not has_remote and not c['dual_use']:
                 result['refused'].append(blank_name_refusal(c, 'blank_name'))
@@ -454,8 +454,8 @@ def main():
             result = sync_contacts(client, rate_limiter, conn, args.dry_run)
 
             output = {
-                # A refusal is work the sync would not do, so it fails the run the way
-                # an error does.
+                # A refusal is work the sync left undone, so it fails the run as an
+                # error does.
                 "success": len(result['errors']) == 0 and len(result['refused']) == 0,
                 "dry_run": args.dry_run,
                 "company": company_name,
