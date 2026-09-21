@@ -342,12 +342,12 @@ Connections and mappings are established via `operations/connect-bank-feeds.md`.
 
 **Scripts:**
 - `list_open_items.py` -- trade account queries and subledger totals
-- `adapters/{sor}/scan_unclassed_pl.py` -- Check 12's SoR-side class scan (for QBO). Needs the SoR credentials; no other Review check does
+- `adapters/{sor}/scan_unclassed_pl.py` -- Check 12's SoR-side class scan (for QBO), the only Review script that needs a credential
 - `export_to_excel.py` -- generates multi-sheet review workbook (`review_package` envelope)
 
 **Processing approach:**
 
-1. **Run all checks** defined in `reference/review-checks.md` (13 checks covering imports, trade accounts, balance sheet, income statement, error detection, subledger ties, and unclassed P&L activity in the system of record). Checks 1 through 11 read staging; Check 12 reads the SoR and needs its credentials. Suppress known exceptions from `review-notes.md`. The agent reasons about materiality using business context -- no hardcoded dollar thresholds.
+1. **Run all checks** defined in `reference/review-checks.md`, covering imports, trade accounts, balance sheet, income statement, error detection, subledger ties, and unclassed P&L activity in the system of record. Checks 1 through 11 read staging; Check 12 reads the SoR and needs its credentials. Suppress known exceptions from `review-notes.md`. The agent reasons about materiality using business context -- no hardcoded dollar thresholds.
 
 2. **Generate Excel review package** at `{workpapers_dir}/period-close/{periodLabel}/{periodLabel}-review.xlsx` — alongside the workpaper, like every period-specific artifact (matches `reference/review-checks.md`; never a separate top-level output folder) — with dashboard, transaction register, subledger-to-GL tie, and period-over-period variance tabs. This is the primary deliverable for human review.
 
