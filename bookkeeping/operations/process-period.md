@@ -346,7 +346,7 @@ Connections and mappings are established via `operations/connect-bank-feeds.md`.
 
 **Processing approach:**
 
-1. **Run all checks** defined in `reference/review-checks.md` (12 checks covering imports, trade accounts, balance sheet, income statement, error detection, and subledger ties). Suppress known exceptions from `review-notes.md`. The agent reasons about materiality using business context -- no hardcoded dollar thresholds.
+1. **Run all checks** defined in `reference/review-checks.md` (13 checks covering imports, trade accounts, balance sheet, income statement, error detection, subledger ties, and unclassed P&L activity in the system of record). Suppress known exceptions from `review-notes.md`. The agent reasons about materiality using business context -- no hardcoded dollar thresholds.
 
 2. **Generate Excel review package** at `{workpapers_dir}/period-close/{periodLabel}/{periodLabel}-review.xlsx` — alongside the workpaper, like every period-specific artifact (matches `reference/review-checks.md`; never a separate top-level output folder) — with dashboard, transaction register, subledger-to-GL tie, and period-over-period variance tabs. This is the primary deliverable for human review.
 
