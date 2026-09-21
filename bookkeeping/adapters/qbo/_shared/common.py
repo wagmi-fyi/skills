@@ -587,6 +587,17 @@ def check_consumed_credit_group(
     return None
 
 
+def _stranded_credit_reason(status, external_id) -> str:
+    """Why a bank-funded credit memo's payment row is outside this run's selection."""
+    if external_id is not None:
+        return f"it already carries external id {external_id}"
+    if status is None:
+        return "it carries no sync status"
+    if status == 'ignore':
+        return "it is set to ignore, so somebody suppressed it"
+    return f"its sync status is {status}"
+
+
 def find_bank_funded_payment_gaps(
     conn: sqlite3.Connection,
     sync_status: str,
@@ -598,9 +609,10 @@ def find_bank_funded_payment_gaps(
     A bank-funded TAP (source_ta_id NULL, import_id set) reaches QBO through exactly two
     selections: query_trade_account_payments, once per parent type, and
     query_payout_consumed_credits. A row neither one takes stays pending and no count
-    includes it. The run still reports success. Both selections read the one sync status
-    this run was given, so a sibling row in another status changes which of them takes a
-    row without being one itself. The publish completeness rule in
+    includes it. The run still reports success. Both selections read the one sync status this
+    run was given. A bank-funded credit memo outside that status still reduces its bank line,
+    so it changes what the other rows on that line should publish. The publish completeness
+    rule in
     reference/quality-guidelines.md calls that a failure, so this turns it into a stop.
 
     The gaps, each in the publisher's error form:
@@ -614,11 +626,13 @@ def find_bank_funded_payment_gaps(
     invoices would post at gross and the bank would be over by the credit. The data does not
     say which key is right, so the run stops and a person decides.
 
-    DEPOSIT_CREDIT_OFF_STATUS means a bank-funded invoice row this run would publish shares
-    a deposit key with a credit memo's payment row in a sync status this run does not read.
-    Both consumed-credit SQL sites read one status, so that credit is invisible to them and
-    the invoices come back on the gross singleton path. This test reads the credit rows in
-    every status.
+    DEPOSIT_CREDIT_OFF_STATUS means a bank-funded invoice row this run would publish sits on
+    the same bank line and contact as a bank-funded credit memo the consumed-credit selection
+    does not take. That selection reads one sync status, so a credit row in another status,
+    or one already carrying an external id, falls outside it and no phase posts the credit.
+    The line then publishes payments that do not agree with the money the bank received.
+    This test reads the credit rows whatever status they carry and whatever key they hold,
+    so it covers a settlement-keyed line, whose deposit key is NULL by design.
 
     Every code in CONSUMED_CREDIT_REFUSALS is a gap too. check_consumed_credit_group tests
     them, and the publisher calls the same function, so a clean report means the
@@ -696,38 +710,48 @@ def find_bank_funded_payment_gaps(
                         f"but it is keyed differently, so it sits outside the group. The "
                         f"credit and the invoices it reduces must share one key.")})
 
-    # Both consumed-credit SQL sites read one sync status, so a credit memo's payment row in
-    # any other status leaves its invoices on the singleton path and no test above sees it.
-    # The invoices would post at full face and the bank would be over by the credit. This
-    # test reads the credit rows whatever status they carry, and names the invoice rows.
-    # A row whose invoices are published already is not eligible, so a book repaired by the
-    # recipe in gotchas.md stays clean.
-    key = deposit_group_key('ta', 'tap')
-    cm_key = deposit_group_key('cmta', 'cmtap')
-    off_status = {}
-    for tap_id, cm_tap_id, cm_status in cursor.execute(f"""
-        SELECT tap.id, cmtap.id, json_extract(cmtap.sync, '$.status')
+    # A bank-funded credit memo reduces what the bank received on its line. No phase posts
+    # one unless the consumed-credit selection takes it, and that selection reads the one
+    # sync status this run was given. A credit row it does not take leaves that bank line's
+    # payments disagreeing with the money that arrived. On a plain deposit the invoices
+    # would publish at full face. On a settlement, whose cash is already net, the credit is
+    # a second claim on the same money. Name the invoice rows either way. A published
+    # invoice row is not eligible, so a book repaired by the recipe in gotchas.md is not
+    # named.
+    stranded = {}
+    for import_id, contact, cm_tap_id, cm_status, cm_external_id in cursor.execute("""
+        SELECT tap.import_id, ta.contact, tap.id,
+               json_extract(tap.sync, '$.status'), json_extract(tap.sync, '$.external_id')
         FROM trade_account_payments tap
         INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
-        INNER JOIN trade_account_payments cmtap ON cmtap.source_ta_id IS NULL
-          AND cmtap.import_id IS NOT NULL
-        INNER JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
-          AND cmta.type = 'credit_memo' AND cmta.voided_at IS NULL
-        WHERE ta.type = 'receivable' AND {" AND ".join(where)} AND {cm_key} = {key}
-        ORDER BY tap.id, cmtap.id
-    """, params).fetchall():
-        if cm_tap_id not in selected_consumed and tap_id not in off_status:
-            off_status[tap_id] = (cm_tap_id, cm_status)
-    for tap_id, (cm_tap_id, cm_status) in sorted(off_status.items()):
-        gaps.append({
-            'payment_id': tap_id,
-            'error_code': 'DEPOSIT_CREDIT_OFF_STATUS',
-            'error_message': (
-                f"Bank-funded payment {tap_id} pays an invoice on a bank line whose credit "
-                f"memo payment {cm_tap_id} carries sync status {cm_status!r}, which this run "
-                f"does not publish. The invoice would post at full face and the bank would "
-                f"be over by the credit. Put the credit row in this run's status, or publish "
-                f"the invoices in the status the credit row carries.")})
+        WHERE ta.type = 'credit_memo' AND tap.source_ta_id IS NULL
+          AND tap.import_id IS NOT NULL
+        ORDER BY tap.id
+    """).fetchall():
+        if cm_tap_id not in selected_consumed:
+            stranded.setdefault((import_id, contact),
+                                (cm_tap_id, cm_status, cm_external_id))
+    if stranded:
+        for tap_id, import_id, contact in cursor.execute(f"""
+            SELECT tap.id, tap.import_id, ta.contact
+            FROM trade_account_payments tap
+            INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
+            WHERE ta.type = 'receivable' AND {" AND ".join(where)}
+            ORDER BY tap.id
+        """, params).fetchall():
+            found = stranded.get((import_id, contact))
+            if found is None:
+                continue
+            cm_tap_id, cm_status, cm_external_id = found
+            gaps.append({
+                'payment_id': tap_id,
+                'error_code': 'DEPOSIT_CREDIT_OFF_STATUS',
+                'error_message': (
+                    f"Bank-funded payment {tap_id} sits on the bank line that funds credit "
+                    f"memo payment {cm_tap_id}, which no phase will post: "
+                    f"{_stranded_credit_reason(cm_status, cm_external_id)}. This line's "
+                    f"payments and the money that arrived do not agree, so the row is held "
+                    f"back. gotchas.md says what to do about each reason.")})
 
     # The gate tests each group with the function the publisher uses. The selection carries
     # no date window, so the gate tests only a group that holds a row this run would publish.
