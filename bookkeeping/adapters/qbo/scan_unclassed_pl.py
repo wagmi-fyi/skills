@@ -38,13 +38,21 @@ reports can read as a clear gate over money with no class.
 
 Their totals go out side by side with `totals_agree`. A difference leaves the run
 standing, because an account row aggregates transactions of both signs, and because the
-sign conventions of the two reports have not been checked against a company that tracks
-classes. When the two disagree over whether there is any unclassed activity at all, the
+sign conventions of the two reports have not been checked on a company carrying unclassed
+money. When the two disagree over whether there is any unclassed activity at all, the
 summary line says so.
 
 A company that tracks classes and whose detail report carries no class column is a wall,
 and the scan raises. Read as an empty class, a missing column reports every transaction.
 Read as absent, it reports none.
+
+## What nobody has seen yet
+
+A company that tracks classes and carries unclassed money in the period. The key lookup is
+proven on a company that tracks none, where QuickBooks emits the column anyway. The detail
+report's class column is proven on a company that tracks them. Not both at once, so the
+account rollup and the record list have never run against real unclassed money, and no
+record has had its account and id read off a live report.
 
 ## Gate semantics
 
