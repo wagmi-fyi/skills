@@ -2,27 +2,19 @@
 """
 Scan the system of record for P&L activity that carries no class.
 
-The client reads "Profit and Loss by Class" in QuickBooks. When that report shows an
-unclassed column, the money in it belongs to no class, and the client sees it. This
-script reads the same report and reports what is in that column.
-
-## Why the staging database cannot answer this
-
-Staging is not the system of record. A record can exist in QuickBooks that staging never
-created: a bank-feed entry, a hand-keyed transaction, a payment processor's auto-post. A
-record can also be adopted into staging during a close, and the adoption stamps a class on
-the local row while the QuickBooks original still has none. In both cases staging reads
-clean and QuickBooks is still wrong.
+The client reads "Profit and Loss by Class" in QuickBooks. Money in that report's unclassed
+column belongs to no class, and this script reads the same report and says what is in it.
+Why staging cannot answer the question, when to skip the check and what to record are in
+reference/review-checks.md, Check 12.
 
 ## What it reads
 
 Two reports, both on the accrual basis, which is the basis the local ledger keeps.
 
 ProfitAndLoss summarized by Classes gives the column the client sees. The no-class column
-is found by its title ("Not Specified", "Unclassified", "No Class", or blank), never by its
-position. A title match survives a column moving. It does not survive a relabel, and a
-client may also name a real class one of those words, so the second report is what makes
-the answer safe.
+is found by its title ("Not Specified", "Unclassified", "No Class", or blank). A title
+match survives a column moving. It breaks on a relabel, and a client may name a real class
+one of those words, so the second report is what makes the answer safe.
 
 ProfitAndLossDetail with its class column names every transaction whose class is empty.
 
@@ -30,24 +22,20 @@ ProfitAndLossDetail with its class column names every transaction whose class is
 
 The two reports have to agree that there is unclassed activity, or that there is none. A
 disagreement means the column lookup found the wrong column, or missed the right one, or
-fired on a real class a client happened to name "Unclassified". The scan raises rather than
-answer, because both failure directions are silent: one reports a client's properly classed
-money as a fault, the other reports a clear gate over money with no class.
+fired on a real class a client happened to name "Unclassified". The scan raises, because
+both failure directions are silent. One reports a client's properly classed money as a
+fault. The other reports a clear gate over money with no class.
 
-Their amounts are reported side by side with `totals_agree`, and a difference does not fail
-the run. An account row aggregates transactions of both signs, so the two sums are not
-required to match line for line, and the sign conventions of the two reports have not been
-checked against a live company.
+Their amounts are reported side by side with `totals_agree`, and a difference leaves the
+run standing. An account row aggregates transactions of both signs, so the two sums can
+differ honestly, and the sign conventions of the two reports have not been checked against
+a live company.
 
 ## Gate semantics
 
-success=False when unclassed P&L activity exists. Exit 1 goes with it, as in
-scan_sor_direct_records.py. This is a Review check, not a Hard Stop: a client that uses no
-classes has every P&L line in that column and nothing to resolve. See
-reference/review-checks.md, Check 12.
-
-The fix is to stamp the class on the QuickBooks record. The staging row already holds the
-right class, so reclassifying locally would change the wrong side.
+success=False when unclassed P&L activity exists, and exit 1 goes with it, as in
+scan_sor_direct_records.py. The gate flags; a firm that wants it to stop a close says so in
+its firm files.
 
 READ-ONLY against the books: two report reads, no QuickBooks writes, no local database. It
 does write `{local_dir}/adapters/.env` when the shared client rotates an OAuth token, which
@@ -96,7 +84,7 @@ ACCOUNTING_METHOD = 'Accrual'
 DETAIL_COLUMNS = ('tx_date,txn_type,doc_num,name,memo,account_name,'
                   'klass_name,subt_nat_amount')
 
-# Anything under half a cent is a rounding artifact of the report, not activity.
+# Anything under half a cent is a rounding artifact of the report.
 CENT = 0.005
 
 
@@ -104,8 +92,8 @@ def walk_data_rows(rows, fn):
     """Call fn on the ColData of every data row, nested sections included.
 
     A QuickBooks report section carries its own labels under Header and Summary, which are
-    separate keys. Only a data row has ColData at its top level, so a section total is
-    never counted alongside the lines it totals.
+    separate keys. A data row is the only kind with ColData at its top level, so a section
+    total stays out of the count alongside the lines it totals.
     """
     for row in rows or []:
         nested = row.get('Rows')
@@ -118,9 +106,9 @@ def walk_data_rows(rows, fn):
 def parse_amount(raw, where):
     """Report money as a float, or None when the cell is empty.
 
-    An empty cell means no activity. A cell holding something that is not a number means
-    the report is not the shape this script reads, so it raises. Reading it as no activity
-    would drop the row out of the finding without a word.
+    An empty cell means no activity in that class. A cell holding anything else means the
+    report has a shape this script does not read, so it raises. Read as no activity, the
+    row would drop out of the finding without a word.
     """
     text = (raw or '').replace(',', '').strip()
     if not text:
@@ -134,8 +122,8 @@ def parse_amount(raw, where):
 def find_unclassed_column(report):
     """Return (index, label) of the no-class column, or (None, None).
 
-    The column is found by its title. Column 0 is the account name and the last column is
-    usually the total, so neither can be the answer, and no position is assumed.
+    The column is found by its title. Column 0 holds the account name and the last column
+    usually holds the total, so both are skipped.
     """
     columns = report.get('Columns', {}).get('Column', [])
     for i, column in enumerate(columns):
@@ -151,9 +139,9 @@ def unclassed_by_account(report, index):
     """Every account with activity in the no-class column.
 
     A leaf account row carries the account's QuickBooks id in its first cell, and a report
-    row that carries no id is a total or a label. reconcile_trial_balance.py reads the same
-    report family the same way. Without the id test a top-level "Net Income" row counts as
-    an account and its money is added to the column a second time.
+    row with no id is a total or a label. reconcile_trial_balance.py reads the same report
+    family the same way. Without the id test, a top-level "Net Income" row counts as an
+    account and adds its money to the column a second time.
     """
     found = []
 
