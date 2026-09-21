@@ -630,8 +630,8 @@ def find_bank_funded_payment_gaps(
     invoices would post at gross and the bank would be over by the credit. The data does not
     say which key is right, so the run stops and a person decides.
 
-    DEPOSIT_CREDIT_OFF_STATUS means a bank-funded invoice row this run would publish sits on
-    the same bank line and contact as a bank-funded credit memo the consumed-credit selection
+    DEPOSIT_CREDIT_OFF_STATUS means a bank-funded invoice row this run would publish shares
+    a bank line and a contact with a bank-funded credit memo the consumed-credit selection
     does not take. That selection reads one sync status, so a credit row in another status,
     or one already carrying an external id, falls outside it and no phase posts the credit.
     The line then publishes payments that do not agree with the money the bank received.
@@ -782,8 +782,8 @@ def find_bank_funded_payment_gaps(
                 'payment_id': tap_id,
                 'error_code': 'DEPOSIT_CREDIT_OFF_STATUS',
                 'error_message': (
-                    f"Bank-funded payment {tap_id} sits on the bank line that funds credit "
-                    f"memo payment {cm_tap_id}, which nothing will post: {reason}. This "
+                    f"Bank-funded payment {tap_id} shares a bank line with credit memo "
+                    f"payment {cm_tap_id}, which nothing will post: {reason}. This "
                     f"line's payments and the money that arrived do not agree, so the row "
                     f"is held back. gotchas.md says what to do.")})
 
