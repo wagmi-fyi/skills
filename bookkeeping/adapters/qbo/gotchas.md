@@ -20,9 +20,8 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
 ## Reports
 
 - **A report column's identity is the `MetaData` entry named `ColKey`.** `ColType` holds a
-  data type (`Date`, `String`, `Money`) and `ColTitle` holds a display label. The names a
-  report request asks for, `klass_name` and `subt_nat_amount` and the rest, are in neither,
-  so a parser keyed on `ColType` finds no column on any company. Earned 2026-09-21.
+  data type and `ColTitle` a display label. The names a report request asks for, such as
+  `klass_name`, appear in neither. Earned 2026-09-21.
 - **On `ProfitAndLossDetail` the account is the section a row sits in.** That section's
   header carries the account name and its QBO id on its first cell. A header with no id is
   a classification group (Income, Expenses) enclosing the accounts. Asking for
