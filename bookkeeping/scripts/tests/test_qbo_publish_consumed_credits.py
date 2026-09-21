@@ -34,7 +34,7 @@ from unittest import mock
 # SkipTest: unittest only converts the latter to a skip under discover(), and
 # raises it uncaught when a module is named directly.
 SOR_SKIP_REASON = (
-    "QBO SDK absent (python-quickbooks) — SoR publisher tests skipped. "
+    "QBO SDK absent (python-quickbooks), so the SoR publisher tests are skipped. "
     "Install the QBO block from the bookkeeping skill's requirements.txt."
 )
 try:
@@ -320,12 +320,12 @@ class ConsumedCreditPublishTests(unittest.TestCase):
         self.assertEqual(self.captured, [])
         self.assertEqual([(e['payment_id'], e['error_code']) for e in errors],
                          [(cm_tap, 'PAYOUT_GROUP_INCOMPLETE')])
-        # The row carries the refusal, so the next run sees why rather than retrying blind.
+        # The row carries the refusal, so the next run sees why.
         self.assertEqual(self._tap_sync(cm_tap), ('error', None))
 
     def test_a_credit_larger_than_the_invoices_counts_as_failed(self):
         """The refusal table decides the counters. A deposit that brought in no cash was
-        priced and could not be posted, so its rows are failures, not skips."""
+        priced and could not be posted, so its rows count as failures."""
         _, taps = build_deposit(self.conn, {}, invoice_faces=(5000,), credit_face=9000)
         processed, failed, skipped, errors, ext_ids = self._run()
         self.assertEqual((processed, failed, skipped), (0, 2, 0))
@@ -334,8 +334,8 @@ class ConsumedCreditPublishTests(unittest.TestCase):
             self.assertEqual(self._tap_sync(tap_id), ('error', None))
 
     def test_an_empty_payout_id_does_not_join_two_bank_lines(self):
-        """An empty payout id is no payout id. Two bank lines carrying a blank string are
-        two deposits, not one."""
+        """A payout id that is an empty string counts as absent. Two bank lines carrying a
+        blank string are two deposits."""
         first = insert_import(self.conn, 50000)
         second = insert_import(self.conn, 30000, date='2026-07-15')
         inv_1 = insert_ta(self.conn, 'receivable', 60000, 'INV-1', {'payout_id': ''})
@@ -432,8 +432,8 @@ class DepositGroupKeyTests(unittest.TestCase):
             self.conn, 'pending', None, None), [])
 
     def test_a_payment_with_no_import_keeps_its_own_path(self):
-        """A payment with no bank line behind it is nobody's deposit. It must not be pulled
-        out of the singleton path by a payout that consumes a credit."""
+        """A payment with no bank line behind it belongs to no deposit. It must not be
+        pulled out of the singleton path by a payout that consumes a credit."""
         import_id = insert_import(self.conn, 50000)
         inv_1 = insert_ta(self.conn, 'receivable', 60000, 'INV-1', {'payout_id': 'PO-1'})
         cm_ta = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {'payout_id': 'PO-1'})
@@ -448,8 +448,8 @@ class DepositGroupKeyTests(unittest.TestCase):
         self.assertEqual(singleton, {tap_no_import})
 
     def test_one_import_spanning_two_payouts_is_unaffected(self):
-        """A payout that consumes a credit consolidates; another payout on the same bank
-        line still posts its own way. Both are right, so neither is a gap."""
+        """A payout that consumes a credit consolidates. Another payout on the same bank
+        line still posts its own way. Neither is a gap."""
         import_id = insert_import(self.conn, 90000)
         inv_a = insert_ta(self.conn, 'receivable', 60000, 'INV-1', {'payout_id': 'PO-1'})
         cm_a = insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {'payout_id': 'PO-1'})
@@ -489,8 +489,7 @@ class BankFundedGapTests(unittest.TestCase):
         self.assertEqual(self._gaps(), [])
 
     def test_a_parent_type_no_phase_reads_is_a_gap(self):
-        """A bank-funded vendor credit matches no selection. It must stop the run rather
-        than sit pending while the rest of the deposit posts."""
+        """A bank-funded vendor credit matches no selection, so it must stop the run."""
         import_id = insert_import(self.conn, 25000)
         vc_ta = insert_ta(self.conn, 'vendor_credit', 25000, 'VC-1', {},
                           contact='Dockside Freight')
@@ -518,14 +517,13 @@ class BankFundedGapTests(unittest.TestCase):
         self.assertEqual(by_row, {
             tap_1: 'DEPOSIT_GROUP_SPLIT',
             tap_2: 'DEPOSIT_GROUP_SPLIT',
-            # The credit is left in a group of its own, which is the other half of the
-            # same fault and is refused on its own terms.
+            # The credit is left in a group of its own, which is refused on its own terms.
             tap_cm: 'PAYOUT_GROUP_INCOMPLETE',
         })
 
     def test_a_bank_funded_credit_inside_a_settlement_is_a_gap(self):
         """A settlement's cash is already net of its credit, so a bank-funded credit memo
-        on the same bank line cannot be netted again. Report it instead of guessing."""
+        on the same bank line cannot be netted again. The gate reports it."""
         import_id = insert_import(self.conn, 90000)
         inv_ta = insert_ta(self.conn, 'receivable', 100000, 'INV-1', {})
         insert_tap(self.conn, inv_ta, 90000, import_id=import_id,
@@ -541,7 +539,7 @@ class BankFundedGapTests(unittest.TestCase):
 
     def test_a_group_the_publisher_would_refuse_is_a_gap(self):
         """The gate asks the publisher's own question. A deposit whose credit memo has no
-        invoice of its own is refused before anything posts, not after."""
+        invoice of its own is refused before anything posts."""
         import_id = insert_import(self.conn, 50000)
         inv_ta = insert_ta(self.conn, 'receivable', 60000, 'INV-A', {},
                            contact='Northwind Supply')
@@ -586,7 +584,7 @@ class BankFundedGapTests(unittest.TestCase):
 
     def test_an_unpublished_parent_invoice_is_not_a_gap(self):
         """The gate runs before the invoice phase, so an unsynced parent is the ordinary
-        state at that moment. It is retryable, not a refusal."""
+        state at that moment. The publisher retries it on a later run."""
         import_id = insert_import(self.conn, 50000)
         inv_ta = insert_ta(self.conn, 'receivable', 60000, None, {})
         cm_ta = insert_ta(self.conn, 'credit_memo', 10000, None, {})
