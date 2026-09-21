@@ -2,10 +2,11 @@
 """Two holes in the QBO payments publisher (NO real QBO calls).
 
 Hole 1, sync-status complementarity. The consumed-credit selection reads the one sync
-status the run was given. A credit memo's payment row it does not take leaves the invoices
-on that bank line to publish at full face. The bank then holds more than it received and
-the credit memo stays unapplied. The gate reads the credit rows in every status now and
-names those invoice rows.
+status the run was given. A credit memo's payment row it leaves behind still reduces its
+bank line, so the payments on that line stop agreeing with the money that arrived. The
+gate reads the credit rows in every status now and names the invoice rows on that line.
+A credit row carrying an external id is in QuickBooks already, and one set to ignore is a
+person's decision that it never will be, so neither strands its line.
 
 Hole 2, create then record. The publisher creates the QuickBooks Payment, then writes its
 id into staging. The phase used to save the database once at the end, so a crash lost the
@@ -14,17 +15,15 @@ row reaches QuickBooks now, so a crash costs the one object in flight. Closing t
 one needs a record of the intent written before the create, which is a unit of its own.
 The test for it stays an expected failure here.
 
-Four tests assert the gate stays quiet: an ordinary deposit, a repaired book, a deposit
-with no credit memo, and a second customer on one bank line. They pass against the code as
-it was before the gate learned this check, so they are evidence about the future rather
-than about this change. They are what fails if a later check names a row it should leave
-alone.
+Five tests assert the gate stays quiet: an ordinary deposit, a repaired book, a bank line
+that takes a later payment, a deposit with no credit memo, and a second customer on one
+bank line. Three of them pass against the code as it stood before this check existed, so
+they guard against a check that names a row it should leave alone.
 
 Run:
     python3 -m unittest scripts.tests.test_qbo_publish_two_holes
 """
 
-import importlib.util
 import json
 import os
 import sqlite3
@@ -33,20 +32,14 @@ import unittest
 from unittest import mock
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-SIBLING = os.path.join(THIS_DIR, 'test_qbo_publish_consumed_credits.py')
+SKILL_DIR = os.path.dirname(os.path.dirname(THIS_DIR))
 
 # The consumed-credit module owns the fixture builders and the adapter loader for this
-# subject. It has to exist once in the process: both copies would mutate sys.path and
-# sys.modules through its loader, and its unloader would delete those entries under the
-# other copy. Take the one unittest already imported, or register the one loaded here
-# under the same name.
-_SIBLING_NAME = 'scripts.tests.test_qbo_publish_consumed_credits'
-cc = sys.modules.get(_SIBLING_NAME)
-if cc is None:
-    _spec = importlib.util.spec_from_file_location(_SIBLING_NAME, SIBLING)
-    cc = importlib.util.module_from_spec(_spec)
-    sys.modules[_SIBLING_NAME] = cc
-    _spec.loader.exec_module(cc)
+# subject. Import it under its own name, so unittest and this module share one copy and
+# one set of the process-global entries its loader writes.
+if SKILL_DIR not in sys.path:
+    sys.path.insert(0, SKILL_DIR)
+import scripts.tests.test_qbo_publish_consumed_credits as cc  # noqa: E402
 
 
 def _set_sync(conn, tap_id, status, external_id=None):
@@ -74,7 +67,7 @@ class SyncStatusComplementarityTests(unittest.TestCase):
     def _named(self, sync_status='pending'):
         return {(g['payment_id'], g['error_code']) for g in self._gaps(sync_status)}
 
-    def _singletons(self, sync_status='pending'):
+    def _singleton_ids(self, sync_status='pending'):
         return {r['tap_id'] for r in cc.common.query_trade_account_payments(
             self.conn, sync_status, None, None, ta_type='receivable')}
 
@@ -88,13 +81,12 @@ class SyncStatusComplementarityTests(unittest.TestCase):
         self.assertEqual(self._named(), {(taps['R1'], 'DEPOSIT_CREDIT_OFF_STATUS'),
                                          (taps['R2'], 'DEPOSIT_CREDIT_OFF_STATUS')})
         # The rows the gate names are the ones the singleton path would have posted.
-        self.assertEqual(self._singletons(), {taps['R1'], taps['R2']})
+        self.assertEqual(self._singleton_ids(), {taps['R1'], taps['R2']})
 
-    def test_every_status_the_credit_row_can_carry_stops_the_run(self):
-        """error, verify, ignore, synced and a missing sync value all hide the credit from
-        both selections, so each one has to reach the same stop."""
-        for status, external_id in [('error', None), ('verify', None), ('ignore', None),
-                                    ('synced', 'QBO-PMT-9'), (None, None)]:
+    def test_every_status_that_leaves_the_credit_unposted_stops_the_run(self):
+        """error, verify and a missing sync value each leave the credit out of the run with
+        nothing in QuickBooks to show for it, so each one reaches the same stop."""
+        for status, external_id in [('error', None), ('verify', None), (None, None)]:
             with self.subTest(status=status):
                 conn, path = cc.make_temp_db()
                 try:
@@ -173,7 +165,7 @@ class SyncStatusComplementarityTests(unittest.TestCase):
         design and no key comparison reaches it. A bank-funded credit memo inside one is a
         second claim on money the settlement already accounted for, so the line's payments
         and the money that arrived stop agreeing."""
-        for status in ('pending', 'error', 'ignore'):
+        for status in ('pending', 'error'):
             with self.subTest(status=status):
                 conn, path = cc.make_temp_db()
                 try:
@@ -192,6 +184,13 @@ class SyncStatusComplementarityTests(unittest.TestCase):
                              for g in cc.common.find_bank_funded_payment_gaps(
                                  conn, 'pending', None, None)}
                     self.assertIn((tap_inv, 'DEPOSIT_CREDIT_OFF_STATUS'), named)
+                    # The status is not why this row is out, so the message must not
+                    # send a person to change it.
+                    message = next(
+                        g['error_message'] for g in
+                        cc.common.find_bank_funded_payment_gaps(conn, 'pending', None, None)
+                        if g['payment_id'] == tap_inv)
+                    self.assertIn('settled through a channel', message)
                 finally:
                     conn.close()
                     os.remove(path)
@@ -205,27 +204,43 @@ class SyncStatusComplementarityTests(unittest.TestCase):
         self.assertEqual(self._named(), {(taps['R1'], 'DEPOSIT_CREDIT_OFF_STATUS'),
                                          (taps['R2'], 'DEPOSIT_CREDIT_OFF_STATUS')})
 
-    def test_a_credit_row_carrying_an_external_id_stops_the_run(self):
-        """The row sits at the run's status and the consumed-credit selection still skips
-        it, because that selection takes rows with no external id. The message has to give
-        the id as the reason, since telling a person to change the status does nothing."""
+    def test_a_credit_row_carrying_an_external_id_is_accounted_for(self):
+        """An external id means the credit reached QuickBooks. publish.py selects no such
+        row and scan_sor_direct_records.py counts it as accounted for, so it leaves its
+        bank line alone whatever status it carries."""
         _, taps = cc.build_deposit(self.conn, {})
         _set_sync(self.conn, taps['CM'], 'pending', external_id='QBO-PMT-4')
 
-        self.assertEqual(self._named(), {(taps['R1'], 'DEPOSIT_CREDIT_OFF_STATUS'),
-                                         (taps['R2'], 'DEPOSIT_CREDIT_OFF_STATUS')})
-        message = self._gaps()[0]['error_message']
-        self.assertIn('QBO-PMT-4', message)
-        self.assertNotIn('sync status', message)
+        self.assertEqual(self._gaps(), [])
 
-    def test_a_suppressed_credit_row_says_somebody_suppressed_it(self):
-        """A person sets a row to ignore to keep it out of QuickBooks. Doing that to a
-        bank-funded credit memo whose invoices are unpublished leaves the invoices to post
-        at full face, so the run stops and the message gives that reason."""
+    def test_a_suppressed_credit_row_leaves_its_bank_line_alone(self):
+        """Setting a row to ignore says it will never reach QuickBooks. That is a person's
+        decision about the line, and the gate takes it, so a payment applied to the line
+        afterwards still publishes."""
         _, taps = cc.build_deposit(self.conn, {})
         _set_sync(self.conn, taps['CM'], 'ignore')
 
-        self.assertIn('suppressed', self._gaps()[0]['error_message'])
+        self.assertEqual(self._gaps(), [])
+
+    def test_a_repaired_line_takes_a_later_payment(self):
+        """The recipe in gotchas.md nets a credit into a posted Payment by hand and sets
+        the credit row to ignore. A payment applied to that bank line later has to publish,
+        because the credit is already accounted for in QuickBooks."""
+        import_id = cc.insert_import(self.conn, 90000)
+        first = cc.insert_ta(self.conn, 'receivable', 60000, 'INV-A', {})
+        cm_ta = cc.insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {})
+        later = cc.insert_ta(self.conn, 'receivable', 40000, 'INV-B', {})
+        cc.insert_tap(self.conn, first, 60000, import_id=import_id)
+        tap_cm = cc.insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
+        tap_later = cc.insert_tap(self.conn, later, 40000, import_id=import_id)
+        self.conn.commit()
+        _set_sync(self.conn, list(self.conn.execute(
+            "SELECT id FROM trade_account_payments WHERE trade_account_id = ?",
+            (first,)).fetchone())[0], 'synced', external_id='QBO-PMT-1')
+        _set_sync(self.conn, tap_cm, 'ignore')
+
+        self.assertEqual(self._gaps(), [])
+        self.assertIn(tap_later, self._singleton_ids())
 
     def test_a_missing_sync_value_reads_as_words(self):
         """A row with no sync value at all. The message a person reads carries a phrase
@@ -415,8 +430,9 @@ class CreateThenRecordTests(unittest.TestCase):
                 pass
 
     def test_the_singleton_path_costs_the_payment_in_flight_and_no_others(self):
-        """The same crash on the path most books spend most of their rows in. Three plain
-        invoice collections, the process killed after the second create."""
+        """Most books spend most of their rows on the singleton path, so it takes the same
+        crash. Three plain invoice collections, the process killed after the second
+        create."""
         self._singletons(3)
         self._run_singletons(self.conn, crash_after=2)
         self.assertEqual(len(self.captured), 2, 'two payments reached QuickBooks')
