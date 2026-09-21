@@ -9,6 +9,12 @@ back to the local contacts table.
 Handles dual-use contacts (e.g., Amazon on both A/R and A/P) by creating a
 separate "(Vendor)" contact for the A/P side and updating local postings/TAs.
 
+A contact whose name is blank or whitespace is refused and reported under
+"refused". Contacts are auto-created from whatever name a posting carries, so a
+source row with an empty payee makes one. QuickBooks has no name for such a
+party, and the dual-use split would repoint ledger rows onto " (Vendor)".
+Guarding the creation sites is the fix; this refusal holds until then.
+
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
       {python} {module_root}/adapters/qbo/sync_contacts.py [--dry_run]
@@ -140,6 +146,25 @@ def create_qbo_vendor(client, rate_limiter, display_name: str) -> Tuple[Optional
 # Contact Classification
 # =============================================================================
 
+def is_blank_name(name) -> bool:
+    """True for a name QuickBooks cannot use: None, empty, or whitespace only."""
+    return not (name or '').strip()
+
+
+BLANK_NAME_REMEDY = ('set a name on the rows that point at this contact, then re-run; '
+                     'a contact no row points at can be deleted')
+
+
+def blank_name_refusal(contact: Dict, reason: str) -> Dict:
+    """A refusal an operator can act on, with the rows that point at the contact."""
+    return {
+        'contact': contact['name'], 'reason': reason,
+        'ar_postings': contact['ar_postings'], 'ap_postings': contact['ap_postings'],
+        'recv_tas': contact['recv_tas'], 'pay_tas': contact['pay_tas'],
+        'remedy': BLANK_NAME_REMEDY,
+    }
+
+
 def classify_contacts(conn: sqlite3.Connection) -> List[Dict]:
     """
     Analyze all contacts and determine what QBO entity type they need.
@@ -233,7 +258,17 @@ def create_vendor_split(conn: sqlite3.Connection, contact_name: str, dry_run: bo
     """
     For a dual-use contact, create a "(Vendor)" variant and repoint A/P
     postings and payable TAs to the new contact name.
+
+    A blank source name is refused before any write. This reassigns existing ledger
+    rows, so the refusal lives in the function and any later caller inherits it.
     """
+    if is_blank_name(contact_name):
+        return {
+            'original': contact_name, 'vendor_name': None,
+            'refused': True, 'reason': 'blank_name_source',
+            'ap_postings_repointed': 0, 'payable_tas_repointed': 0,
+        }
+
     vendor_name = f"{contact_name} (Vendor)"
     cursor = conn.cursor()
 
@@ -282,6 +317,7 @@ def sync_contacts(client, rate_limiter, conn: sqlite3.Connection, dry_run: bool)
         'classified': 0, 'customers_created': 0, 'customers_existing': 0,
         'vendors_created': 0, 'vendors_existing': 0,
         'dual_use_splits': [], 'skipped': 0, 'errors': [], 'details': [],
+        'refused': [],
     }
 
     contacts = classify_contacts(conn)
@@ -289,8 +325,12 @@ def sync_contacts(client, rate_limiter, conn: sqlite3.Connection, dry_run: bool)
 
     for c in contacts:
         if c['dual_use']:
+            # A blank source is refused inside create_vendor_split, before any UPDATE.
             split_info = create_vendor_split(conn, c['name'], dry_run)
-            result['dual_use_splits'].append(split_info)
+            if split_info.get('refused'):
+                result['refused'].append(blank_name_refusal(c, split_info['reason']))
+            else:
+                result['dual_use_splits'].append(split_info)
 
     contacts = classify_contacts(conn)
 
@@ -305,6 +345,16 @@ def sync_contacts(client, rate_limiter, conn: sqlite3.Connection, dry_run: bool)
     for c in contacts:
         name = c['name']
         has_remote = c['remote_id'] is not None and c['remote_id'] != ''
+
+        if is_blank_name(name):
+            # QuickBooks has no name for this party, so nothing is created for it and it
+            # counts as skipped. A contact QuickBooks already holds is done, and a re-run
+            # changes nothing, so it passes through as it always did. A dual-use blank
+            # contact was refused by the split above and gets no second entry.
+            result['skipped'] += 1
+            if not has_remote and not c['dual_use']:
+                result['refused'].append(blank_name_refusal(c, 'blank_name'))
+            continue
 
         if c['needs_customer'] and not c['needs_vendor']:
             if has_remote:
@@ -404,7 +454,9 @@ def main():
             result = sync_contacts(client, rate_limiter, conn, args.dry_run)
 
             output = {
-                "success": len(result['errors']) == 0,
+                # A refusal is work the sync left undone, so it fails the run as an
+                # error does.
+                "success": len(result['errors']) == 0 and len(result['refused']) == 0,
                 "dry_run": args.dry_run,
                 "company": company_name,
                 "contacts_analyzed": result['classified'],
@@ -415,6 +467,7 @@ def main():
                 "dual_use_splits": result['dual_use_splits'],
                 "skipped": result['skipped'],
                 "errors": result['errors'],
+                "refused": result['refused'],
                 "details": result['details'],
             }
 

@@ -2,6 +2,8 @@
 
 Unified analytical procedures for the Review domain. All checks are read-only — no database writes. The agent runs each check, reasons about the results using business context (company overview, prior period data, materiality), and records findings to the workpaper.
 
+Checks 1 through 11 read the staging database. Check 12 reads the system of record. Check 13 is the local extensibility hook.
+
 ## Checks
 
 ### 1. Imports Completeness
@@ -82,7 +84,23 @@ Suppress only the **specific** known exceptions listed in `review-notes.md`; don
 
 **Note — compute CM/VC remaining correctly:** a credit_memo/vendor_credit is consumed through two legitimate forms: **credit applications** (TAPs with `source_ta_id` = the CM/VC, applied against a target invoice/bill) and **direct/owner-cleared settlement** (TAPs with `trade_account_id` = the CM/VC and no `source_ta_id` — used when the credit settles through a clearing/owner account because funds moved outside business accounts, or a vendor refund arrives as a bank deposit; the publisher's owner-cleared phase publishes exactly this shape). Remaining is `amount_due − compute_consumed_amount` (which sums both forms). Counting only one form makes the other read as permanently open credit — a phantom subledger-to-GL variance that does not exist in the system of record. Prefer `list_open_items.py` — it already dispatches by type.
 
-### 12. Additional Local Steps
+### 12. Unclassed P&L Activity (system of record)
+
+**Intent:** The client reads the SoR's "Profit and Loss by Class", and money in its unclassed column belongs to no class. Staging cannot answer it: a record adopted during a close carries a class locally while the SoR original has none, and a record staging never created carries none at all.
+
+**Skip when the client does not use classes.** Every P&L line is then in that column. `review-notes.md` records which clients use them.
+
+**Preconditions:** SoR credentials, the only Review check that needs any. For QBO, the OAuth block in `{local_dir}/adapters/.env`. Where the SoR is unreachable, record that as the result.
+
+**Script:** `adapters/qbo/scan_unclassed_pl.py --period_start {periodStart} --period_end {periodEnd}` for QBO. It reads two reports that have to agree, and fails saying so when they disagree. Read `success` and `error` as well as the exit code.
+
+**Flag when:** any account carries activity in the unclassed column. The finding names each account and amount, and each transaction with its date, type, document number, counterparty and SoR id.
+
+**What to record:** the flagged transactions, and the class the staging row holds for each. A correction made in Review is a system failure under Hard Stop 4, so the stamp goes on the SoR record on the next Publish pass, and a locked period routes through the user. A record staging never created has no class to take; adopt it first, and adopting alone leaves the class off.
+
+A firm that wants this check to stop a close says so in its firm files.
+
+### 13. Additional Local Steps
 
 **Intent:** Extensibility hook for client-specific review procedures beyond the core checks.
 
