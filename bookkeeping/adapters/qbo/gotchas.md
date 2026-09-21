@@ -55,11 +55,30 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   one key, then run again. A row no metadata change can route has no remedy in the skill
   today, and that book publishes no bank-funded payments until the row is dealt with. Raise it.
 
+- **A bank-funded credit memo nothing will post holds back the payment phases.**
+  `DEPOSIT_CREDIT_OFF_STATUS` names each invoice row that shares the credit's bank line and
+  contact, and the message says why the credit row sits outside the run. A credit that never
+  reached QuickBooks goes back into the run's status. One that did reach QuickBooks needs its
+  id on the row. A row carrying an id, or set to `ignore`, passes once an invoice on that
+  line has published, which is where the repair recipe below leaves a book. Before that the
+  invoices would publish for more than the bank received, so take the credit out of
+  `ignore`, or void it when it should never post. No script in the skill sets these values
+  today. Raise it.
+
+- **A run that dies re-posts the one payment it had in flight.** The three payment
+  publishers save each turn of the loop before the next one reaches QuickBooks, so a crash
+  costs the payment whose id had not reached staging. `scan_sor_direct_records.py` does not
+  see that duplicate, because it carries the `[bk:]` tag. The invoice, bill and
+  credit-document publishers still save once at the end of their phase, so a crash there
+  loses every id that phase wrote. After a run known to have died, check the rows still
+  unpublished, in `trade_accounts` as well as `trade_account_payments`.
+
 - **A book whose invoices already posted at full face shows one credit memo in
-  `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit, the
-  CreditMemo floats at `RemainingCredit` equal to its face, and its payment row is still pending.
-  The publisher cannot net a deposit whose invoices are already posted. Repair it by hand with the
-  recipe below. Later deposits then publish whole on their own.
+  `PAYOUT_PARTIALLY_PUBLISHED`.** The bank is over by the credit, the CreditMemo floats at
+  `RemainingCredit` equal to its face, and its payment row is still pending. The publisher cannot
+  net a deposit whose invoices are already posted. Repair it by hand with the recipe below. Later
+  deposits then publish whole on their own. `PAYOUT_GROUP_INCOMPLETE` is a different state: the
+  credit memo's customer has no invoice on that bank line and nothing there has published.
 
 - **Netting a credit into a Payment that already posted.** One sparse update on ONE of the
   deposit's QBO Payments: `TotalAmt = ΣR − ΣCM`, `Line = [Invoice LinkedTxn(face), CreditMemo

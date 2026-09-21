@@ -547,16 +547,10 @@ def check_consumed_credit_group(
     inv_rows = [r for r in group if r['role'] == 'invoice']
     cm_rows = [r for r in group if r['role'] == 'credit']
 
-    # Completeness: a consumed-credit deposit must carry >=1 invoice AND >=1 credit TAP.
-    # The selection guarantees a credit. This test catches a group whose invoices went
-    # elsewhere, so no CM-only Payment is ever built.
-    if not inv_rows or not cm_rows:
-        return ('PAYOUT_GROUP_INCOMPLETE',
-                f'Deposit {group_key}: incomplete consumed-credit group '
-                f'({len(inv_rows)} invoice / {len(cm_rows)} credit TAP). Refusing to publish.')
-
     # Partially published: consolidating the remainder would emit a deposit smaller than
-    # the real bank line. The settlement_id guard tests the same thing.
+    # the real bank line. The settlement_id guard tests the same thing. It runs before the
+    # completeness test below. A deposit whose invoices published at full face leaves a
+    # group holding one credit row. That deposit is half posted.
     already_synced = conn.execute(f"""
         SELECT COUNT(*) FROM trade_account_payments tap
         JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
@@ -569,6 +563,15 @@ def check_consumed_credit_group(
         return ('PAYOUT_PARTIALLY_PUBLISHED',
                 f'Deposit {group_key}: {already_synced} bank-funded TAP(s) already synced; '
                 f'cannot consolidate remainder. Manual reconciliation required.')
+
+    # Completeness: a consumed-credit deposit must carry >=1 invoice AND >=1 credit TAP.
+    # The selection guarantees a credit. This test catches a group whose invoices went
+    # elsewhere, so no CM-only Payment is ever built. Nothing on this bank line has
+    # published, or the test above would have answered first.
+    if not inv_rows or not cm_rows:
+        return ('PAYOUT_GROUP_INCOMPLETE',
+                f'Deposit {group_key}: incomplete consumed-credit group '
+                f'({len(inv_rows)} invoice / {len(cm_rows)} credit TAP). Refusing to publish.')
 
     # Uniformity: the Payment takes its bank, customer and date from one row of the group.
     banks = {r['payment_account_remote_id'] for r in group if r.get('payment_account_remote_id')}
@@ -585,6 +588,21 @@ def check_consumed_credit_group(
                 f'Deposit {group_key}: deposit_cents={deposit_cents} not > 0 (SUM CM >= SUM R)')
 
     return None
+
+
+def _stranded_credit_reason(status, external_id, has_key: bool, sync_status: str) -> str:
+    """Why a bank-funded credit memo's payment row is outside this run's selection."""
+    if external_id is not None:
+        return (f"it carries external id {external_id}, and no invoice on this line has "
+                f"published")
+    if status == 'ignore':
+        return "it is set to ignore, and no invoice on this line has published"
+    if not has_key:
+        return ("its bank line is settled through a channel, and the consumed-credit phase "
+                "reads no settled line")
+    if status is None:
+        return "it carries no sync status"
+    return f"its sync status is {status}, and this run publishes {sync_status}"
 
 
 def find_bank_funded_payment_gaps(
@@ -611,6 +629,18 @@ def find_bank_funded_payment_gaps(
     holds. The credit and the invoices it reduces would land in different groups, so the
     invoices would post at gross and the bank would be over by the credit. The data does not
     say which key is right, so the run stops and a person decides.
+
+    DEPOSIT_CREDIT_OFF_STATUS means a bank-funded invoice row this run would publish shares
+    a bank line and a contact with a bank-funded credit memo the consumed-credit selection
+    does not take. That selection reads one sync status, so a credit row in another status,
+    or one already carrying an external id, falls outside it and no phase posts the credit.
+    The line then publishes payments that do not agree with the money the bank received.
+    This check reads the credit rows whatever status they carry. It pairs them on the bank
+    line and the contact, which reaches a settled line, whose deposit key is NULL by design.
+    A credit row carrying an external id, or set to ignore, has been dealt with. Its line
+    passes once an invoice on that line has published, which is where the repair recipe in
+    gotchas.md leaves a book. The invoice rows are named until then. Every stranded credit
+    on a line is kept, so two payouts settled together each answer for their own.
 
     Every code in CONSUMED_CREDIT_REFUSALS is a gap too. check_consumed_credit_group tests
     them, and the publisher calls the same function, so a clean report means the
@@ -687,6 +717,75 @@ def find_bank_funded_payment_gaps(
                         f"contact as a consumed-credit deposit keyed on import {import_id}, "
                         f"but it is keyed differently, so it sits outside the group. The "
                         f"credit and the invoices it reduces must share one key.")})
+
+    # DEPOSIT_CREDIT_OFF_STATUS, as the docstring describes it. On a settlement, whose
+    # cash is already net, a stranded credit is a second claim on money the settlement
+    # accounted for. A key present on both sides that disagrees is two deposits sharing
+    # one bank line, and neither reduces the other.
+    inv_key = deposit_group_key('ta', 'tap')
+    cm_key = deposit_group_key('cmta', 'cmtap')
+
+    def _pairs(one, other) -> bool:
+        """Two deposit keys belong to one bank line unless both exist and differ."""
+        return one is None or other is None or one == other
+
+    stranded = defaultdict(list)
+    for import_id, contact, cm_tap_id, cm_status, cm_ext, cm_group_key in cursor.execute(f"""
+        SELECT cmtap.import_id, cmta.contact, cmtap.id,
+               json_extract(cmtap.sync, '$.status'),
+               json_extract(cmtap.sync, '$.external_id'), {cm_key}
+        FROM trade_account_payments cmtap
+        INNER JOIN trade_accounts cmta
+            ON cmtap.trade_account_id = cmta.id AND cmta.voided_at IS NULL
+        WHERE cmta.type = 'credit_memo' AND cmtap.source_ta_id IS NULL
+          AND cmtap.import_id IS NOT NULL
+        ORDER BY cmtap.id
+    """).fetchall():
+        if cm_tap_id not in selected_consumed:
+            dealt_with = cm_ext is not None or cm_status == 'ignore'
+            stranded[(import_id, contact)].append(
+                (cm_tap_id, cm_status, cm_ext, dealt_with, cm_group_key))
+    if stranded:
+        # An invoice row that reached QBO stays evidence of a repair after its trade
+        # account is voided, because the object it posted is still there.
+        published = defaultdict(list)
+        for import_id, contact, group_key in cursor.execute(f"""
+            SELECT tap.import_id, ta.contact, {inv_key}
+            FROM trade_account_payments tap
+            INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id
+            WHERE ta.type = 'receivable' AND tap.source_ta_id IS NULL
+              AND tap.import_id IS NOT NULL
+              AND json_extract(tap.sync, '$.external_id') IS NOT NULL
+        """).fetchall():
+            published[(import_id, contact)].append(group_key)
+        for tap_id, import_id, contact, group_key in cursor.execute(f"""
+            SELECT tap.id, tap.import_id, ta.contact, {inv_key}
+            FROM trade_account_payments tap
+            INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
+            WHERE ta.type = 'receivable' AND {" AND ".join(where)}
+            ORDER BY tap.id
+        """, params).fetchall():
+            posted = published[(import_id, contact)]
+            blocking = [
+                credit for credit in stranded[(import_id, contact)]
+                if _pairs(group_key, credit[4])
+                and not (credit[3] and any(_pairs(key, credit[4]) for key in posted))
+            ]
+            if not blocking:
+                continue
+            # A credit nobody has dealt with is the more useful cause to report.
+            cm_tap_id, cm_status, cm_ext, _, cm_group_key = min(
+                blocking, key=lambda credit: (credit[3], credit[0]))
+            reason = _stranded_credit_reason(cm_status, cm_ext,
+                                             cm_group_key is not None, sync_status)
+            gaps.append({
+                'payment_id': tap_id,
+                'error_code': 'DEPOSIT_CREDIT_OFF_STATUS',
+                'error_message': (
+                    f"Bank-funded payment {tap_id} shares a bank line with credit memo "
+                    f"payment {cm_tap_id}, which nothing will post: {reason}. This "
+                    f"line's payments and the money that arrived do not agree, so the row "
+                    f"is held back. gotchas.md says what to do.")})
 
     # The gate tests each group with the function the publisher uses. The selection carries
     # no date window, so the gate tests only a group that holds a row this run would publish.

@@ -53,6 +53,8 @@ def publish_credit_applications(
     default_bank_remote_id = config.get('qbo_default_bank_remote_id')
 
     for row in rows:
+        conn.commit()  # saved before the next QuickBooks call; see payments.py
+
         tap_id = row['tap_id']
 
         # Pre-flight: both source CM/VC and target invoice/bill must be synced.

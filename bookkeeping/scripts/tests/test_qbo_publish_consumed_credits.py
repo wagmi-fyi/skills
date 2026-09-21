@@ -523,7 +523,9 @@ class BankFundedGapTests(unittest.TestCase):
 
     def test_a_bank_funded_credit_inside_a_settlement_is_a_gap(self):
         """A settlement's cash is already net of its credit, so a bank-funded credit memo
-        on the same bank line cannot be netted again. The gate reports it."""
+        on the same bank line cannot be netted again. The gate reports it, and reports the
+        invoice row beside it, because nothing will post that credit and the line's
+        payments no longer agree with the money that arrived."""
         import_id = insert_import(self.conn, 90000)
         inv_ta = insert_ta(self.conn, 'receivable', 100000, 'INV-1', {})
         insert_tap(self.conn, inv_ta, 90000, import_id=import_id,
@@ -533,9 +535,12 @@ class BankFundedGapTests(unittest.TestCase):
                             metadata={'settlement_id': 'SET-1'})
         self.conn.commit()
 
-        gaps = self._gaps()
-        self.assertEqual([g['payment_id'] for g in gaps], [cm_tap])
-        self.assertEqual(gaps[0]['error_code'], 'PAYMENT_MATCHES_NO_PHASE')
+        inv_tap = self.conn.execute(
+            "SELECT id FROM trade_account_payments WHERE trade_account_id = ?",
+            (inv_ta,)).fetchone()[0]
+        self.assertEqual({(g['payment_id'], g['error_code']) for g in self._gaps()},
+                         {(cm_tap, 'PAYMENT_MATCHES_NO_PHASE'),
+                          (inv_tap, 'DEPOSIT_CREDIT_OFF_STATUS')})
 
     def test_a_group_the_publisher_would_refuse_is_a_gap(self):
         """The gate calls the publisher's group check. A deposit whose credit memo has no
@@ -713,6 +718,21 @@ database_name: "%s"
         self.assertIn({'payment_id': tap_id, 'error_code': 'PAYMENT_MATCHES_NO_PHASE',
                        'error_message': mock.ANY}, result['errors'])
 
+
+    def test_an_off_status_credit_fails_the_dry_run(self):
+        """A credit memo's payment row the run will not publish leaves its invoices to post
+        at full face. The dry run is where a bookkeeper looks, so it has to fail there."""
+        _, taps = build_deposit(self.conn, {})
+        self.conn.execute("UPDATE trade_account_payments SET sync = ? WHERE id = ?",
+                          ('{"status":"error","external_id":null}', taps['CM']))
+        self.conn.commit()
+
+        code, result = self._dry_run()
+        self.assertEqual(code, 1)
+        self.assertFalse(result['success'])
+        named = {(e['payment_id'], e['error_code']) for e in result['errors']}
+        self.assertEqual(named, {(taps['R1'], 'DEPOSIT_CREDIT_OFF_STATUS'),
+                                 (taps['R2'], 'DEPOSIT_CREDIT_OFF_STATUS')})
 
     def test_owner_cleared_alone_does_not_gate_on_bank_funded_rows(self):
         """The owner-cleared phase touches no bank-funded row, so it must not be stopped by
