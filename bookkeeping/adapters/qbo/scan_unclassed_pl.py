@@ -29,7 +29,7 @@ so the finding says which records to fix.
 success=False when unclassed P&L activity exists. Exit 1 goes with it, as in
 scan_sor_direct_records.py. This is a Review check, not a Hard Stop: a client that uses no
 classes has every P&L line in that column and nothing to resolve. See
-reference/review-checks.md, Check 13.
+reference/review-checks.md, Check 12.
 
 The fix is to stamp the class on the QuickBooks record. The staging row already holds the
 right class, so reclassifying locally would change the wrong side.
