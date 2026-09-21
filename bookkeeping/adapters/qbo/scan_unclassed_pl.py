@@ -12,8 +12,7 @@ reference/review-checks.md, Check 12.
 The company's accounting preferences first. A company with class tracking switched off
 carries no classes, so there is nothing to check and the scan says so and stops. Without
 that read, QuickBooks answers such a company with an unclassed column holding the whole
-statement, and the scan would call every dollar in the books unclassed. True, and no use
-to anybody.
+statement, and the scan would call every dollar in the books unclassed.
 
 Then two reports, both on the accrual basis, which is the basis the local ledger keeps.
 
@@ -42,17 +41,17 @@ sign conventions of the two reports have not been checked on a company carrying 
 money. When the two disagree over whether there is any unclassed activity at all, the
 summary line says so.
 
-A company that tracks classes and whose detail report carries no class column is a wall,
-and the scan raises. Read as an empty class, a missing column reports every transaction.
+A company that tracks classes and whose detail report carries no class column cannot be
+read safely, so the scan raises. Read as an empty class, a missing column reports every transaction.
 Read as absent, it reports none.
 
-## What nobody has seen yet
+## What no live run has covered
 
 A company that tracks classes and carries unclassed money in the period. The key lookup is
 proven on a company that tracks none, where QuickBooks emits the column anyway. The detail
-report's class column is proven on a company that tracks them. Not both at once, so the
-account rollup and the record list have never run against real unclassed money, and no
-record has had its account and id read off a live report.
+report's class column is proven on a company that tracks them. No run has covered both at
+once, so the account rollup and the record list have never run against real unclassed
+money, and no record has had its account and id read off a live report.
 
 ## Gate semantics
 
@@ -109,7 +108,7 @@ UNCLASSED_LABELS = {'not specified', 'unclassified', 'no class', ''}
 ACCOUNTING_METHOD = 'Accrual'
 
 # The detail report's columns, by key. account_name is not among them: the account is the
-# section a row sits in, and QuickBooks drops the column from the answer without a word.
+# section a row sits in, and QuickBooks returns no such column and no error.
 DETAIL_COLUMNS = 'tx_date,txn_type,doc_num,name,memo,klass_name,subt_nat_amount'
 
 # Anything under half a cent is a rounding artifact of the report.
@@ -188,8 +187,8 @@ def parse_amount(raw, where):
 def find_unclassed_column(report):
     """Return (index, label) of the no-class column, or (None, None).
 
-    The key is the answer. The title match behind it is the fallback for a report with no
-    column metadata, and it skips column 0, which holds the account name under a blank
+    The lookup reads the key first. The title match behind it is the fallback for a report
+    with no column metadata, and it skips column 0, which holds the account name under a blank
     title that is itself one of the labels. The last column is the row total.
     """
     columns = report.get('Columns', {}).get('Column', [])
