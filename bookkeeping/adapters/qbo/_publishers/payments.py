@@ -72,10 +72,10 @@ def publish_payments(
     # Mixed R+CM: TotalAmt = Σ R − Σ CM, Lines = N Invoice + M CreditMemo
     # LinkedTxn. Empty cm_taps makes the CM branches below no-ops.
     for sid, group_rows in settlement_groups.items():
-        # Save the previous row's outcome before this row reaches QuickBooks. The id QBO
-        # returns is the only local record of an object. A run that dies with it unsaved
-        # posts the object again. An error mark needs saving too. An operator reads it to
-        # find what to retry.
+        # Save what the last turn of this loop did before this one reaches QuickBooks.
+        # The id QBO returns is the only local record of an object. A run that dies with
+        # it unsaved posts the object again. An error mark needs saving too. An operator
+        # reads it to find what to retry.
         conn.commit()
 
         cm_taps = query_settlement_credit_apps(conn, sid)
@@ -312,7 +312,7 @@ def publish_payments(
     # Per-row singleton path (existing behavior)
     rows = singleton_rows
     for row in rows:
-        conn.commit()  # saved before the next QuickBooks call; see payments.py
+        conn.commit()  # saved before the next QuickBooks call; see the note above
 
         tap_id = row['tap_id']
 
@@ -466,7 +466,7 @@ def publish_payout_consumed_credits(
         groups[row['group_key']].append(row)
 
     for group_key, group in groups.items():
-        conn.commit()  # saved before the next QuickBooks call; see payments.py
+        conn.commit()  # saved before the next QuickBooks call; see the note above
 
         # The group-level refusals live in common.check_consumed_credit_group. The publisher
         # and the gate call the same function.
