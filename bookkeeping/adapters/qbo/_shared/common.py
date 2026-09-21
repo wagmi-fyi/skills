@@ -616,11 +616,8 @@ def find_bank_funded_payment_gaps(
     A bank-funded TAP (source_ta_id NULL, import_id set) reaches QBO through exactly two
     selections: query_trade_account_payments, once per parent type, and
     query_payout_consumed_credits. A row neither one takes stays pending and no count
-    includes it. The run still reports success. Both selections read the one sync status this
-    run was given. A bank-funded credit memo outside that status still reduces its bank line,
-    so it changes what the other rows on that line should publish. The publish completeness
-    rule in reference/quality-guidelines.md calls that a failure, so this turns it into a
-    stop.
+    includes it. The run still reports success. The publish completeness rule in
+    reference/quality-guidelines.md calls that a failure, so this turns it into a stop.
 
     The gaps, each in the publisher's error form:
 
