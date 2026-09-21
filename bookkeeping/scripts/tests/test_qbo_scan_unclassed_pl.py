@@ -545,8 +545,8 @@ class ScanTests(unittest.TestCase):
     # ---------------- the two sides ----------------
 
     def test_a_summary_column_the_detail_does_not_corroborate_fails_the_gate(self):
-        """Money on either side is money somebody has to look at. Raising here would kill
-        a run over a shape difference and report nothing at all."""
+        """Money on either side is money somebody has to look at. Raising here would stop
+        the run over a shape difference and report nothing at all."""
         result = self._one_finding(
             [account_row('40', 'Consulting Income', '1000.00', '250.00', '1250.00')],
             detail_rows=[under_group('Income', under_account(
