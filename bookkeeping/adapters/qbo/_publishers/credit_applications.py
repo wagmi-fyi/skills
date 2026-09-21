@@ -161,6 +161,9 @@ def publish_credit_applications(
             update_sync_success(conn, 'trade_account_payments', tap_id, ext_id)
             external_ids.append(ext_id)
             processed += 1
+            # Save before the next application. The id QBO returned is the only record that
+            # this object exists, and a run that dies with it unsaved posts it again.
+            conn.commit()
         else:
             errors.append({
                 'payment_id': tap_id,
