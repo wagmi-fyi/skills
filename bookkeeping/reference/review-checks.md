@@ -94,7 +94,7 @@ Suppress only the **specific** known exceptions listed in `review-notes.md`; don
 
 **Flag when:** any account carries activity in the unclassed column. The finding lists each account with its amount and each transaction with its date, type, document number, counterparty and SoR id.
 
-**Resolution:** stamp the class on the SoR record. The staging row already holds the right class, so reclassifying locally corrects the wrong side. This is a flag, not a Hard Stop: the gates that must clear before a period closes are listed in `quality-guidelines.md`, and this is not one of them.
+**Resolution:** stamp the class on the SoR record. Where a staging row already holds the right class, reclassifying locally corrects the wrong side. Where the record is one staging never created, adopt it and stamp the SoR record; adopting it alone clears Hard Stop 7 and leaves the class off. This is a flag, not a Hard Stop: the gates that must clear before a period closes are listed in `quality-guidelines.md`, and this is not one of them.
 
 ### 13. Additional Local Steps
 
