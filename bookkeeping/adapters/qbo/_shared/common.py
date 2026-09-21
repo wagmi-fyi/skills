@@ -614,9 +614,8 @@ def find_bank_funded_payment_gaps(
 
     Three gaps, all returned in the publisher's error form:
 
-    PAYMENT_MATCHES_NO_PHASE means the row matches no selection. A bank-funded credit memo
-    was this before the consumed-credit phase existed, and so is any future parent type or
-    metadata shape the phases do not know.
+    PAYMENT_MATCHES_NO_PHASE means the row matches no selection. It is a parent type or a
+    metadata shape no phase reads, such as a bank-funded vendor credit.
 
     DEPOSIT_GROUP_SPLIT means one import carries a consumed-credit group keyed on the
     import while a sibling receivable under that import is keyed on a payout. The credit and
@@ -677,9 +676,8 @@ def find_bank_funded_payment_gaps(
     # An import-keyed group must hold every bank-funded receivable and credit-memo TAP of
     # its import and contact that no other consumed group already holds. A row in a group of
     # its own is posted whole there, so two deposits on one bank line pass. A payable sibling
-    # passes too, since it publishes as a BillPayment and the bank nets across the two
-    # objects, the way a four-type settlement already does, and so does another customer's
-    # row, which is its own Payment.
+    # passes. It publishes as a BillPayment, and the bank nets across the two objects.
+    # Another customer's row passes, since it is its own Payment.
     import_keys = set()
     for row in consumed:
         key = row['group_key'] or ''
