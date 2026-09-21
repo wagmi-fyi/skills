@@ -58,17 +58,17 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
 - **A bank-funded credit memo nothing will post holds back the payment phases.** The
   consumed-credit selection reads the one sync status the run was given.
   `DEPOSIT_CREDIT_OFF_STATUS` names each invoice row on that credit's bank line, and the
-  message gives the reason the credit row sits outside the run. Put the credit row in the
-  run's status and run again when it never reached QuickBooks. When it did reach
-  QuickBooks, its id belongs on the row. A row carrying an id, or set to `ignore`, passes
+  message gives the reason the credit row sits outside the run. A credit that never
+  reached QuickBooks goes back into the run's status. One that did reach QuickBooks needs
+  its id on the row. A row carrying an id, or set to `ignore`, passes
   the line once an invoice on that line has published, which is where the repair recipe
   below leaves a book. Before that, the invoices would still publish for more than the bank
   received, so the check names them and the message says so. Take the credit out of
   `ignore` there, or void it when it should never post. No script in the skill sets any of
   these values today, which is the same gap as the unroutable row above. Raise it.
 
-- **A run that dies can still re-post the one payment it was in the middle of.** In the
-  three payment publishers, each row's outcome reaches the database before the next row
+- **A run that dies re-posts the one payment it had in flight.** In the three payment
+  publishers, what each turn of the loop did reaches the database before the next one
   reaches QuickBooks, so a crash costs that one payment. It had reached QuickBooks without
   its id reaching staging, and the next run posts it again.
   `scan_sor_direct_records.py` does not see such a duplicate, because it carries the
