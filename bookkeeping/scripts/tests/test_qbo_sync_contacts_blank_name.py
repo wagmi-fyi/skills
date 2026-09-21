@@ -47,7 +47,12 @@ PRE_CHANGE_RESULT_KEYS = [
     'vendors_existing', 'dual_use_splits', 'skipped', 'errors', 'details',
 ]
 
+# The names this module replaces in sys.modules, and what was there before.
+STUBBED = ('_shared', '_shared.client', 'config_loader', 'sync_contacts')
+
 sync_contacts_module = None
+_saved_modules = None
+_saved_path = None
 
 
 def _load_module():
@@ -56,13 +61,16 @@ def _load_module():
     The script resolves config and loads a .env at import time. Neither is available in a
     hermetic test, so both are supplied as stubs before the import.
     """
-    global sync_contacts_module
+    global sync_contacts_module, _saved_modules, _saved_path
     if sync_contacts_module is not None:
         return sync_contacts_module
 
-    for name in [k for k in list(sys.modules)
-                 if k == '_shared' or k.startswith('_shared.')
-                 or k in ('config_loader', 'sync_contacts')]:
+    names = [k for k in list(sys.modules)
+             if k == '_shared' or k.startswith('_shared.')
+             or k in ('config_loader', 'sync_contacts')]
+    _saved_modules = {k: sys.modules[k] for k in names}
+    _saved_path = list(sys.path)
+    for name in names:
         del sys.modules[name]
 
     tmpdir = tempfile.mkdtemp()
@@ -95,6 +103,24 @@ def _load_module():
     import sync_contacts as module
     sync_contacts_module = module
     return module
+
+
+def tearDownModule():
+    """Put sys.modules and sys.path back.
+
+    The stubs replace names other test modules import for real, so a module running after
+    this one in the same process would get the fakes.
+    """
+    global sync_contacts_module, _saved_modules, _saved_path
+    if _saved_modules is None:
+        return
+    for name in STUBBED:
+        sys.modules.pop(name, None)
+    sys.modules.update(_saved_modules)
+    sys.path[:] = _saved_path
+    sync_contacts_module = None
+    _saved_modules = None
+    _saved_path = None
 
 
 class _FakeLimiter:
