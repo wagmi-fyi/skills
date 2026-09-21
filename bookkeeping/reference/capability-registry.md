@@ -323,11 +323,11 @@ If `{firm_root}` is not set, steps 3-4 are skipped. Core adapters documented bel
 
 ### adapters/qbo/sync_contacts.py
 
-- **Purpose:** Creates QBO Customers/Vendors from local contacts. Classifies by posting context (A/R → Customer, A/P → Vendor). Splits dual-use contacts into separate Customer and "(Vendor)" entities.
+- **Purpose:** Creates QBO Customers/Vendors from local contacts. Classifies by posting context (A/R → Customer, A/P → Vendor). Splits dual-use contacts into separate Customer and "(Vendor)" entities. A contact whose name is blank or whitespace is refused, not created: QuickBooks has no name for such a party, and the dual-use split would repoint A/P postings and payable trade accounts onto " (Vendor)".
 - **Domain:** Publishing
 - **Arguments:**
   - `--dry_run` (flag, optional) -- Report planned actions without creating.
-- **Output:** `{"success", "dry_run", "company", "contacts_analyzed", "customers_created", "customers_existing", "vendors_created", "vendors_existing", "dual_use_splits", "skipped", "errors", "details"}`
+- **Output:** `{"success", "dry_run", "company", "contacts_analyzed", "customers_created", "customers_existing", "vendors_created", "vendors_existing", "dual_use_splits", "skipped", "errors", "refused": [{contact, reason}], "details"}`. `refused` carries `blank_name` for a contact the sweep would not send, and `blank_name_source` for a split refused inside `create_vendor_split`. A refusal fails the run, as an error does.
 - **Preconditions:** QBO OAuth credentials in `{local_dir}/adapters/.env`. Contacts with postings in local DB.
 - **Tables:** Reads `contacts`, `postings`, `chart_of_accounts`, `trade_accounts`; writes `contacts` (`remote_id`, `meta`); may insert split vendor contacts and update `postings`/`trade_accounts` references.
 - **When to use:** Before publishing invoices/bills. Run `--dry_run` first to review classifications.
@@ -353,11 +353,23 @@ If `{firm_root}` is not set, steps 3-4 are skipped. Core adapters documented bel
 - **Arguments:**
   - `--period_start` (str, required) -- Period start `YYYY-MM-DD` (inclusive TxnDate floor).
   - `--period_end` (str, required) -- Period end `YYYY-MM-DD` (inclusive TxnDate ceiling).
-  - `--entity_types` (str, optional) -- Comma-separated subset to scan. Default scans all: JournalEntry, Invoice, Bill, CreditMemo, VendorCredit, Payment, BillPayment (the types the publisher tags), plus Deposit and Purchase (never created by the publisher, so any in-window is inherently a direct record).
-- **Output:** `{"success", "period", "entity_types_scanned", "scanned_counts_by_type", "untagged_count", "untagged_records": [{type, id, txn_date, amount, name_or_memo}], "summary"}`. `success` = scan completed AND zero untagged records (closing gate clear). Exit 0 = gate clear; exit 1 = untagged records found (Hard Stop 7) or scan error (then an `error` key is present). PrivateNote is not queryable in QBO, so the scan queries each entity over the TxnDate window and matches the tag client-side, paging to exhaustion (a truncated page would read as a false "clean").
+  - `--entity_types` (str, optional) -- Comma-separated subset to scan. Default scans all: JournalEntry, Invoice, Bill, CreditMemo, VendorCredit, Payment, BillPayment (the types the publisher tags), plus Deposit, Purchase, SalesReceipt and RefundReceipt (never created by the publisher, so any in-window is inherently a direct record). A sales receipt or refund receipt posts income and cash in one record; the bank half also arrives in the bank feed, so leaving the type unscanned lets Publish add a second income posting for a sale QBO already holds.
+- **Output:** `{"success", "period", "entity_types_scanned", "scanned_counts_by_type", "untagged_count", "untagged_records": [{type, id, txn_date, amount, name_or_memo}], "linked_untagged_count", "linked_untagged_records": [{..., linked_via}], "voided_benign_count", "voided_benign_records": [{..., void_marker}], "summary"}`. `untagged_records` is the gate. `linked_untagged_records` carries no `[bk:]` tag but is claimed by a local `sync.external_id` link, and `voided_benign_records` is voided in QBO; both are accounted, reported for transparency, and neither gates. `success` = scan completed AND zero untagged records (closing gate clear). Exit 0 = gate clear; exit 1 = untagged records found (Hard Stop 7) or scan error (then an `error` key is present). PrivateNote is not queryable in QBO, so the scan queries each entity over the TxnDate window and matches the tag client-side, paging to exhaustion (a truncated page would read as a false "clean").
 - **Preconditions:** QBO OAuth credentials in `{local_dir}/adapters/.env`. No local DB required.
 - **Tables:** None — reads QBO only; performs no QBO or local-DB writes (OAuth token rotation in `.env` is the shared client housekeeping, as with every QBO adapter).
 - **When to use:** Before every Publish (Hard Stop 7 in `quality-guidelines.md`). Resolve every surfaced record — reconcile it into staging, account for it, or neutralize a colliding artifact — before publishing; never publish over an untagged in-period record. Complements `reconcile_trial_balance.py` (the as-of value tie at both period ends).
+
+### adapters/qbo/scan_unclassed_pl.py
+
+- **Purpose:** READ-ONLY scan for P&L activity in QBO that carries no class. Reads the ProfitAndLoss report summarized by Classes, on the accrual basis, which is the report the client reads, then names the offending transactions from ProfitAndLossDetail. Staging cannot answer this: a record adopted from QBO carries a class locally while the QBO original has none, and a record staging never created carries no class at all.
+- **Domain:** Publishing
+- **Arguments:**
+  - `--period_start` (str, required) -- Period start `YYYY-MM-DD` (inclusive).
+  - `--period_end` (str, required) -- Period end `YYYY-MM-DD` (inclusive).
+- **Output:** `{"success", "period", "accounting_method", "class_columns", "unclassed_column", "unclassed_total", "unclassed_by_account": [{account, amount}], "unclassed_record_count", "unclassed_records": [{txn_type, date, doc_num, name, account, amount, id}], "summary"}`. `success` = no account carries activity in the unclassed column. Exit 0 = clear; exit 1 = unclassed activity found, or the scan failed (then an `error` key is present). The unclassed column is found by its title ("Not Specified", "Unclassified", "No Class", or blank), never by position, so a relabel upstream cannot turn the result green.
+- **Preconditions:** QBO OAuth credentials in `{local_dir}/adapters/.env`. No local DB required.
+- **Tables:** None. Reads QBO only; performs no QBO or local-DB writes.
+- **When to use:** In Review, as Check 12 in `reference/review-checks.md`. This is not a Hard Stop: a client that uses no classes has every P&L line in that column and nothing to resolve. Skip it for such a client. Where classes are in use, resolve a finding by stamping the class on the QBO record; the staging row already holds the right class, so reclassifying locally would change the wrong side.
 
 ### adapters/qbo/sync_coa.py
 
