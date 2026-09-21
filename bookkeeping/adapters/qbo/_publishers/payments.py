@@ -303,6 +303,10 @@ def publish_payments(
             if cje:
                 update_sync_ignore(conn, 'journal_entries', cje)
 
+        # Save before the next deposit. The id QBO returned is the only record that
+        # this Payment exists, and a run that dies with it unsaved posts it again.
+        conn.commit()
+
     # Per-row singleton path (existing behavior)
     rows = singleton_rows
     for row in rows:
@@ -397,6 +401,10 @@ def publish_payments(
             clearing_je_id = tap_meta.get('clearing_je_id')
             if clearing_je_id:
                 update_sync_ignore(conn, 'journal_entries', clearing_je_id)
+
+            # Save before the next payment. The id QBO returned is the only record that
+            # this Payment exists, and a run that dies with it unsaved posts it again.
+            conn.commit()
         else:
             errors.append({
                 'payment_id': tap_id,
@@ -609,6 +617,10 @@ def publish_payout_consumed_credits(
         for cje in clearing_je_ids:
             if cje:
                 update_sync_ignore(conn, 'journal_entries', cje)
+
+        # Save before the next deposit. The id QBO returned is the only record that
+        # this Payment exists, and a run that dies with it unsaved posts it again.
+        conn.commit()
 
     conn.commit()
     return processed, failed, skipped, errors, external_ids
