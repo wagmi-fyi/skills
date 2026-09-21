@@ -60,11 +60,12 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   `DEPOSIT_CREDIT_OFF_STATUS` names each invoice row on that credit's bank line, and the
   message gives the reason the credit row sits outside the run. Put the credit row in the
   run's status and run again when it never reached QuickBooks. When it did reach
-  QuickBooks, its id belongs on the row, and the gate then passes the line. Setting the row
-  to `ignore` passes the line too, because that says a person took responsibility for it.
-  Check what the bank line should publish before you do that: nothing else stops the
-  invoices posting for more than the bank received. No script in the skill sets either
-  value today, which is the same gap as the unroutable row above. Raise it.
+  QuickBooks, its id belongs on the row. A row carrying an id, or set to `ignore`, passes
+  the line once an invoice on that line has published, which is where the repair recipe
+  below leaves a book. Before that, the invoices would still publish for more than the bank
+  received, so the check names them and the message says so. Take the credit out of
+  `ignore` there, or void it when it should never post. No script in the skill sets any of
+  these values today, which is the same gap as the unroutable row above. Raise it.
 
 - **A run that dies can still re-post the one payment it was in the middle of.** In the
   three payment publishers, each row's outcome reaches the database before the next row
