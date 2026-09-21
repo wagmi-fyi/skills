@@ -390,8 +390,8 @@ class BlankNameTests(unittest.TestCase):
         self.assertIsNone(self._contacts(conn)['Northwind Supply'][0])
 
     def test_a_dry_run_still_refuses_a_blank_name(self):
-        """A dry run reports what the live run will do. The live run will not create this
-        contact, so the preview says so rather than counting it as a create."""
+        """A dry run reports what the live run will do. The live run refuses this
+        contact, so the preview refuses it too."""
         conn = self._db([''], postings=[('', '5000')])
         result = self._run(conn, dry_run=True)
         self.assertEqual([r['reason'] for r in result['refused']], ['blank_name'])
