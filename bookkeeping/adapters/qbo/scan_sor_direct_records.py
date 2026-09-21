@@ -73,10 +73,19 @@ surfaces:
   SalesReceipt     a sale paid at the time it is made, posted straight in QuickBooks.
   RefundReceipt    money paid back to a customer, posted straight in QuickBooks.
 
-A SalesReceipt and a RefundReceipt each post income and cash in one record. The bank half
-also arrives in the bank feed, so staging books its own entry for the same money. Without
-these two types in the scan, Publish adds a second income posting for a sale QuickBooks
-already holds, and the post-publish reconcile is the first thing to notice. Narrow with
+A SalesReceipt posts income and cash in one record. A RefundReceipt reduces income and pays
+cash out in one record. The cash half of either also arrives in the bank feed, so staging
+books its own entry for the same money. Without these two types in the scan, Publish adds a
+second posting for a sale or a refund QuickBooks already holds, and the post-publish
+reconcile is the first thing to notice.
+
+One sale can surface twice. A SalesReceipt banked through Undeposited Funds is one record,
+and the Deposit that clears it is another, so the count and the total read higher than the
+money at stake. The same pairing already holds for a Payment and its Deposit. Read the
+records before reading the total.
+
+The list is not everything the publisher never creates. Transfer and CreditCardPayment each
+move cash that the bank feed also reports, and neither was derived here. Narrow with
 --entity_types when a client's workflow calls for it.
 
 READ-ONLY: no QBO writes; the local staging DB is opened read-only (sqlite mode=ro) solely to
@@ -324,6 +333,35 @@ def _amount(obj, type_name):
     return None
 
 
+def classify_record(obj, type_name, type_links):
+    """Where one QBO record belongs, and the row that describes it.
+
+    Returns (bucket, record). The buckets are 'tagged' (ours, no row needed), 'linked'
+    (claimed by a local external_id), 'voided' (nullified in QBO) and 'untagged'. Only
+    'untagged' gates; the other two rows are reported for transparency.
+    """
+    if has_bk_tag(obj):
+        return 'tagged', None
+
+    rec_id = str(getattr(obj, 'Id', '') or '')
+    rec = {
+        'type': type_name,
+        'id': rec_id,
+        'txn_date': getattr(obj, 'TxnDate', None) or '',
+        'amount': _amount(obj, type_name),
+        'name_or_memo': _name_or_memo(obj),
+    }
+
+    claim = type_links.get(rec_id)
+    if claim:                       # accounted by a local external_id link
+        rec['linked_via'] = '+'.join(sorted(claim))
+        return 'linked', rec
+    if is_voided_benign(obj):       # voided in QBO, nullified, zero impact
+        rec['void_marker'] = (getattr(obj, 'PrivateNote', None) or '').strip()
+        return 'voided', rec
+    return 'untagged', rec
+
+
 def query_window(entity_cls, period_start, period_end, client, rate_limiter):
     """Page an entity to exhaustion over TxnDate in [period_start, period_end].
 
@@ -414,29 +452,16 @@ def main():
             n_linked = 0
             n_voided = 0
             for obj in records:
-                if has_bk_tag(obj):
-                    continue
-                rec_id = str(getattr(obj, 'Id', '') or '')
-                rec = {
-                    'type': type_name,
-                    'id': rec_id,
-                    'txn_date': getattr(obj, 'TxnDate', None) or '',
-                    'amount': _amount(obj, type_name),
-                    'name_or_memo': _name_or_memo(obj),
-                }
-                claim = type_links.get(rec_id)
-                if claim:                       # accounted by a local external_id link
-                    rec['linked_via'] = '+'.join(sorted(claim))
+                bucket, rec = classify_record(obj, type_name, type_links)
+                if bucket == 'linked':
                     linked_untagged.append(rec)
                     n_linked += 1
-                    continue
-                if is_voided_benign(obj):       # voided in QBO — nullified, zero impact
-                    rec['void_marker'] = (getattr(obj, 'PrivateNote', None) or '').strip()
+                elif bucket == 'voided':
                     voided_benign.append(rec)
                     n_voided += 1
-                    continue
-                untagged.append(rec)            # genuine direct record — surfaces the gate
-                n_untagged += 1
+                elif bucket == 'untagged':
+                    untagged.append(rec)
+                    n_untagged += 1
             note = ('  (publisher never tags this type — all are direct)'
                     if type_name not in TAGGED_BY_PUBLISHER and n_untagged else '')
             linknote = f'  (+{n_linked} linked-accounted)' if n_linked else ''
