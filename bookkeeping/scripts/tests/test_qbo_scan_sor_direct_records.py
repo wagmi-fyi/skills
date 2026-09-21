@@ -33,7 +33,7 @@ import unittest
 # class decorator, not a module-level SkipTest: unittest only converts the latter to a skip
 # under discover(), and raises it uncaught when a module is named directly.
 SOR_SKIP_REASON = (
-    "QBO SDK absent (python-quickbooks) — SoR scan tests skipped. "
+    "QBO SDK absent (python-quickbooks); SoR scan tests skipped. "
     "Install the QBO block from the bookkeeping skill's requirements.txt."
 )
 try:
