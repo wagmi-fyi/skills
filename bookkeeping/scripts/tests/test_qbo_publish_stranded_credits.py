@@ -114,14 +114,14 @@ class SyncStatusComplementarityTests(unittest.TestCase):
 
     def test_an_ordinary_deposit_is_not_named(self):
         """Every row at the run's status: the consumed-credit phase takes the deposit whole
-        and the gate has nothing to say."""
+        and the gate names nothing."""
         cc.build_deposit(self.conn, {})
         self.assertEqual(self._gaps(), [])
 
     def test_a_repaired_book_is_not_named(self):
         """The repair recipe in gotchas.md nets the credit into a posted Payment by hand and
         sets the credit row to ignore. Its invoices are published, so no run selects them and
-        the gate stays quiet."""
+        the gate names nothing."""
         _, taps = cc.build_deposit(self.conn, {})
         _set_sync(self.conn, taps['R1'], 'synced', 'QBO-PMT-1')
         _set_sync(self.conn, taps['R2'], 'synced', 'QBO-PMT-1')
