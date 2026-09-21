@@ -361,16 +361,17 @@ If `{firm_root}` is not set, steps 3-4 are skipped. Core adapters documented bel
 
 ### adapters/qbo/scan_unclassed_pl.py
 
-- **Purpose:** READ-ONLY scan for P&L activity in QBO that carries no class. Reads ProfitAndLoss summarized by Classes, on the accrual basis, which is the report the client reads, and ProfitAndLossDetail with its class column, which names the offending transactions. Staging cannot answer this; Check 12 in `reference/review-checks.md` says why.
+- **Purpose:** READ-ONLY scan for P&L activity in QBO that carries no class. Reads the accounting preferences, then ProfitAndLoss summarized by Classes on the accrual basis, which is the report the client reads, and ProfitAndLossDetail, which names the offending transactions. Staging cannot answer this; Check 12 in `reference/review-checks.md` says why.
 - **Domain:** Publishing / Review
 - **Arguments:**
   - `--period_start` (str, required) -- Period start `YYYY-MM-DD` (inclusive). An inclusive window; `period_start` after `period_end` is refused, because QBO answers an inverted window with an empty report that reads as clear.
   - `--period_end` (str, required) -- Period end `YYYY-MM-DD` (inclusive).
-- **Output:** `{"success", "period", "accounting_method", "class_columns", "unclassed_column", "unclassed_account_count", "unclassed_account_total", "unclassed_by_account": [{account, amount}], "unclassed_record_count", "unclassed_record_total", "totals_agree", "unclassed_records": [{txn_type, date, doc_num, name, account, amount, id}], "summary"}`. `success` = no account carries activity in the unclassed column. Exit 0 = clear; exit 1 = unclassed activity found, or the scan failed (then an `error` key is present).
-- **The tie-out:** the two reports have to agree that there is unclassed activity, or that there is none, and the scan fails saying so when they disagree. `unclassed_account_total` is the column as QBO renders it, which counts P&L expense rows positive, so `totals_agree` reports whether the two sums match and a difference leaves the run standing. The script's module docstring carries the reasoning.
+- **Output:** `{"success", "class_tracking", "period", "accounting_method", "class_columns", "unclassed_column", "unclassed_account_count", "unclassed_account_total", "unclassed_by_account": [{account, amount}], "unclassed_record_count", "unclassed_record_total", "totals_agree", "unclassed_records": [{txn_type, date, doc_num, name, account, amount, id}], "summary"}`. `success` = neither report holds unclassed money. Exit 0 = clear; exit 1 = unclassed activity found, or the scan failed (then an `error` key is present).
+- **`class_tracking` false:** the company tracks no classes, no report was read, and the check does not apply. Every other key is empty and `success` is true.
+- **The two sides:** the summary is the account rollup the client reads, and the detail names the records to fix. Money on either one fails the gate. `unclassed_account_total` is the column as QBO renders it, which counts P&L expense rows positive, so `totals_agree` reports whether the two sums match and a difference leaves the run standing. A disagreement over whether any unclassed activity exists goes in `summary`. The script's module docstring carries the reasoning.
 - **Preconditions:** QBO OAuth credentials in `{local_dir}/adapters/.env`. No local DB required.
 - **Tables:** None. Reads QBO only; performs no QBO or local-DB writes (OAuth token rotation in `.env` is the shared client housekeeping, as with every QBO adapter).
-- **When to use:** In Review, as Check 12 in `reference/review-checks.md`, which holds the skip rule and what to record. It flags; a firm that wants it to stop a close says so in its firm files.
+- **When to use:** In Review, as Check 12 in `reference/review-checks.md`, which holds what to record. It flags; a firm that wants it to stop a close says so in its firm files.
 
 ### adapters/qbo/sync_coa.py
 
