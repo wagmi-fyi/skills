@@ -150,12 +150,18 @@ def is_blank_name(name) -> bool:
     return not (name or '').strip()
 
 
-def partition_blank_names(contacts: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
-    """Split classified contacts into the ones the sync may act on and the blank ones."""
-    usable, blank = [], []
-    for contact in contacts:
-        (blank if is_blank_name(contact['name']) else usable).append(contact)
-    return usable, blank
+BLANK_NAME_REMEDY = ('set a name on the rows that point at this contact, then re-run; '
+                     'a contact no row points at can be deleted')
+
+
+def blank_name_refusal(contact: Dict, reason: str) -> Dict:
+    """A refusal an operator can act on: what it is, why, and where its rows are."""
+    return {
+        'contact': contact['name'], 'reason': reason,
+        'ar_postings': contact['ar_postings'], 'ap_postings': contact['ap_postings'],
+        'recv_tas': contact['recv_tas'], 'pay_tas': contact['pay_tas'],
+        'remedy': BLANK_NAME_REMEDY,
+    }
 
 
 def classify_contacts(conn: sqlite3.Connection) -> List[Dict]:
@@ -313,23 +319,19 @@ def sync_contacts(client, rate_limiter, conn: sqlite3.Connection, dry_run: bool)
         'refused': [],
     }
 
-    contacts, blank = partition_blank_names(classify_contacts(conn))
-    result['classified'] = len(contacts) + len(blank)
-    for c in blank:
-        result['refused'].append({'contact': c['name'], 'reason': 'blank_name'})
+    contacts = classify_contacts(conn)
+    result['classified'] = len(contacts)
 
     for c in contacts:
         if c['dual_use']:
+            # A blank source is refused inside create_vendor_split, before any UPDATE.
             split_info = create_vendor_split(conn, c['name'], dry_run)
             if split_info.get('refused'):
-                result['refused'].append({'contact': c['name'],
-                                          'reason': split_info['reason']})
+                result['refused'].append(blank_name_refusal(c, split_info['reason']))
             else:
                 result['dual_use_splits'].append(split_info)
 
-    # The split adds contacts, so the classification is read again. Blank names were
-    # refused above and are dropped here without a second entry.
-    contacts, _ = partition_blank_names(classify_contacts(conn))
+    contacts = classify_contacts(conn)
 
     existing_customers, cust_err = fetch_existing_customers(client, rate_limiter)
     if cust_err:
@@ -342,6 +344,17 @@ def sync_contacts(client, rate_limiter, conn: sqlite3.Connection, dry_run: bool)
     for c in contacts:
         name = c['name']
         has_remote = c['remote_id'] is not None and c['remote_id'] != ''
+
+        if is_blank_name(name):
+            # QuickBooks has no name for this party, so nothing is created for it and it
+            # counts as skipped. A contact QuickBooks already holds is done, and there is
+            # nothing this run can fix, so it is not refused; that is what it did before.
+            # A dual-use blank contact was refused by the split above and gets no second
+            # entry.
+            result['skipped'] += 1
+            if not has_remote and not c['dual_use']:
+                result['refused'].append(blank_name_refusal(c, 'blank_name'))
+            continue
 
         if c['needs_customer'] and not c['needs_vendor']:
             if has_remote:
