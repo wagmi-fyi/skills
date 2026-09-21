@@ -23,7 +23,7 @@ Customer and Vendor and stubs fetch_all_pages, so no SDK type is exercised and t
 run on a deployment without the QBO block.
 
 Run:
-    python3 -m unittest scripts.tests.test_qbo_sync_contacts_blank_name
+    uv run --no-project --with-requirements requirements.txt python3 -m unittest scripts.tests.test_qbo_sync_contacts_blank_name
 """
 
 import json
