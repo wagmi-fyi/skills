@@ -42,8 +42,8 @@ money. When the two disagree over whether there is any unclassed activity at all
 summary line says so.
 
 A company that tracks classes and whose detail report carries no class column cannot be
-read safely, so the scan raises. Read as an empty class, a missing column reports every transaction.
-Read as absent, it reports none.
+read safely, so the scan raises. Read as an empty class, a missing column reports every
+transaction. Read as absent, it reports none.
 
 ## What no live run has covered
 
@@ -187,9 +187,9 @@ def parse_amount(raw, where):
 def find_unclassed_column(report):
     """Return (index, label) of the no-class column, or (None, None).
 
-    The lookup reads the key first. The title match behind it is the fallback for a report
-    with no column metadata, and it skips column 0, which holds the account name under a blank
-    title that is itself one of the labels. The last column is the row total.
+    The lookup reads the key first. The title match behind it is the fallback for a
+    report with no column metadata, and it skips column 0, which holds the account name
+    under a blank title that is itself one of the labels. The last column is the row total.
     """
     columns = report.get('Columns', {}).get('Column', [])
 
