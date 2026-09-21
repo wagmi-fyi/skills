@@ -721,26 +721,10 @@ def find_bank_funded_payment_gaps(
                         f"but it is keyed differently, so it sits outside the group. The "
                         f"credit and the invoices it reduces must share one key.")})
 
-    # A bank-funded credit memo reduces what the bank received on its line. Nothing posts
-    # one unless the consumed-credit selection takes it, and that selection reads the one
-    # sync status this run was given. A credit row it leaves behind puts that bank line's
-    # payments out of step with the money that arrived. The invoices on a plain deposit
-    # would publish at full face. Where the line is a settlement, whose cash is already
-    # net, the credit becomes a second claim on money the settlement accounted for. The
-    # invoice rows are named in both cases.
-    #
-    # A credit row carrying an external id has reached QBO. A row set to ignore carries a
-    # person's decision that it never will. Both say the credit has been dealt with, and
-    # the recipe in gotchas.md ends that way. What tells a repaired line from one where
-    # the credit was put aside before anything posted is whether an invoice on that line
-    # has published. One that has moved past what this check can help with. Until that
-    # happens the line would publish its invoices for more than the bank received.
-    #
-    # Rows pair on the bank line and the contact, which is what reaches a settled line,
-    # whose deposit key is NULL. A key on both sides that disagrees is two deposits sharing
-    # one bank line, and neither reduces the other. Every stranded credit on a line is kept,
-    # so two payouts settled together each answer for their own. The published-invoice test
-    # reads the key the same way, so one payout's posted invoice cannot vouch for another.
+    # DEPOSIT_CREDIT_OFF_STATUS, as the docstring describes it. On a settlement, whose
+    # cash is already net, a stranded credit is a second claim on money the settlement
+    # accounted for. A key present on both sides that disagrees is two deposits sharing
+    # one bank line, and neither reduces the other.
     inv_key = deposit_group_key('ta', 'tap')
     cm_key = deposit_group_key('cmta', 'cmtap')
 
