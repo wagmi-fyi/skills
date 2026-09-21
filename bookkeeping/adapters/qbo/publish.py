@@ -199,9 +199,8 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
                 })
 
     # Every bank-funded payment row must be claimed by a phase, and a deposit must be
-    # posted whole. A gap here is a wrong number waiting to happen, so it fails the run.
-    # The same publish types the live run checks, so a dry run cannot pass where the live
-    # run would hold back, or the other way about.
+    # posted whole. A gap would post a wrong number, and it fails the run. The dry run and
+    # the live run check the same publish types.
     if publish_type in ('all', 'payments'):
         result['bank_funded_payment_gaps'] = find_bank_funded_payment_gaps(
             conn, sync_status, start_date, end_date)
@@ -320,12 +319,11 @@ def main():
             conn.close()
             sys.exit(0 if result['success'] else 1)
 
-        # Live publish. The bank-funded coverage check runs before anything posts: a
+        # Live publish. The bank-funded coverage check runs before anything posts. A
         # dropped payment row or a deposit that cannot be one Payment would put a wrong
-        # number in QBO, and a QBO object is far cheaper to not create than to back out.
-        # It holds back the bank-funded payment phases and nothing else. Journal entries,
-        # invoices, bills and the credit documents carry no wrong number here, and holding
-        # them back would only make the next run larger.
+        # number in QBO. It holds back the bank-funded payment phases and nothing else.
+        # Journal entries, invoices, bills and the credit documents carry no wrong number
+        # here.
         payment_gaps = []
         if publish_type in ('all', 'payments'):
             payment_gaps = find_bank_funded_payment_gaps(
