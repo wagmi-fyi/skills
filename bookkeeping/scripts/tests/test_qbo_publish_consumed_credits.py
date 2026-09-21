@@ -517,7 +517,7 @@ class BankFundedGapTests(unittest.TestCase):
         self.assertEqual(by_row, {
             tap_1: 'DEPOSIT_GROUP_SPLIT',
             tap_2: 'DEPOSIT_GROUP_SPLIT',
-            # The credit is left in a group of its own, which is refused on its own terms.
+            # The credit is left in a group of its own, and that group is refused.
             tap_cm: 'PAYOUT_GROUP_INCOMPLETE',
         })
 
@@ -538,7 +538,7 @@ class BankFundedGapTests(unittest.TestCase):
         self.assertEqual(gaps[0]['error_code'], 'PAYMENT_MATCHES_NO_PHASE')
 
     def test_a_group_the_publisher_would_refuse_is_a_gap(self):
-        """The gate asks the publisher's own question. A deposit whose credit memo has no
+        """The gate calls the publisher's group check. A deposit whose credit memo has no
         invoice of its own is refused before anything posts."""
         import_id = insert_import(self.conn, 50000)
         inv_ta = insert_ta(self.conn, 'receivable', 60000, 'INV-A', {},
@@ -609,7 +609,7 @@ class BankFundedGapTests(unittest.TestCase):
 
         self.assertEqual(self._gaps(), [])
 
-    def test_a_deposit_outside_the_window_is_another_run_s_business(self):
+    def test_a_deposit_outside_the_window_does_not_fail_this_run(self):
         """The consumed-credit selection carries no date window. A broken deposit in another
         period must not fail this period's run."""
         december = insert_import(self.conn, 1000, date='2025-12-15')
@@ -621,7 +621,7 @@ class BankFundedGapTests(unittest.TestCase):
 
         # Unscoped, the credit outweighs the invoice and the deposit is refused.
         self.assertEqual({g['error_code'] for g in self._gaps()}, {'PAYOUT_NEGATIVE_NET'})
-        # Scoped to April, it is out of sight.
+        # A run scoped to April does not select it.
         self.assertEqual(common.find_bank_funded_payment_gaps(
             self.conn, 'pending', '2026-04-01', '2026-04-30'), [])
 
