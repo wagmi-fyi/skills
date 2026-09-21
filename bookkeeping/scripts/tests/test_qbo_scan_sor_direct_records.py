@@ -194,8 +194,8 @@ class EntityCoverageTests(unittest.TestCase):
 
     def test_the_types_the_publisher_never_creates_are_not_in_the_tagged_set(self):
         """A type in the tagged set is only a direct record when it lacks the tag. These
-        four carry no tag ever, so listing one here would read every record as a fault of
-        the publisher rather than a direct entry."""
+        four carry no tag ever, so listing one here would read every record of that type as
+        a failed publish, when each is a direct entry."""
         for name in NEVER_PUBLISHED:
             self.assertNotIn(name, self.scan.TAGGED_BY_PUBLISHER, name)
 
