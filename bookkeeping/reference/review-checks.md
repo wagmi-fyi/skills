@@ -2,7 +2,7 @@
 
 Unified analytical procedures for the Review domain. All checks are read-only — no database writes. The agent runs each check, reasons about the results using business context (company overview, prior period data, materiality), and records findings to the workpaper.
 
-Checks 1 through 11 read the staging database. Check 12 reads the system of record, which is the only place its question can be answered.
+Checks 1 through 11 read the staging database. Check 12 reads the system of record, which is the only place its question can be answered. Check 13 is the local extensibility hook.
 
 ## Checks
 
@@ -90,11 +90,15 @@ Suppress only the **specific** known exceptions listed in `review-notes.md`; don
 
 **Skip when the client does not use classes.** Every P&L line is then in that column and there is nothing to resolve. Classes in use is a client fact; `review-notes.md` records it.
 
-**Script:** `adapters/qbo/scan_unclassed_pl.py --period_start {periodStart} --period_end {periodEnd}` for QBO. Read-only: two report reads, no SoR writes, no local database. It reads ProfitAndLoss summarized by Classes on the accrual basis, then names the offending transactions from ProfitAndLossDetail.
+**Preconditions:** SoR credentials. For QBO that is the OAuth block in `{local_dir}/adapters/.env`, the same one `reconcile_trial_balance.py` and `scan_sor_direct_records.py` use. Review needs no credential for any other check, so on a client where the SoR is not reachable this one cannot run; record that rather than reading its failure as a clean result.
+
+**Script:** `adapters/qbo/scan_unclassed_pl.py --period_start {periodStart} --period_end {periodEnd}` for QBO. Read-only against the books: two report reads, no SoR writes, no local database. It reads ProfitAndLoss summarized by Classes on the accrual basis, and ProfitAndLossDetail with its class column, and the two must agree or the script fails rather than answer. Exit 1 also means the scan itself failed, so read `success` and `error` before reading the exit code.
 
 **Flag when:** any account carries activity in the unclassed column. The finding lists each account with its amount and each transaction with its date, type, document number, counterparty and SoR id.
 
-**Resolution:** stamp the class on the SoR record. Where a staging row already holds the right class, reclassifying locally corrects the wrong side. Where the record is one staging never created, adopt it and stamp the SoR record; adopting it alone clears Hard Stop 7 and leaves the class off. This is a flag, not a Hard Stop: the gates that must clear before a period closes are listed in `quality-guidelines.md`, and this is not one of them.
+**What to record:** the flagged transactions, and for each the class the staging row holds where there is one. Review is read-only analysis and a correction made here is a system failure (Hard Stop 4), so the fix is not made in this domain. The class is stamped on the SoR record, which is a Publish-domain correction on the next run through, and a locked period routes through the user. Reclassifying locally would correct the wrong side where the staging row is already right. A record staging never created has no staging row to take a class from; adopt it first, and note that adopting it clears Hard Stop 7 and leaves the class off.
+
+This is a flag, not a Hard Stop. The gates that must clear before a period closes are listed in `quality-guidelines.md`, and this is not one of them.
 
 ### 13. Additional Local Steps
 
