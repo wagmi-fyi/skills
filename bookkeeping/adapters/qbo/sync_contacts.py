@@ -9,6 +9,11 @@ back to the local contacts table.
 Handles dual-use contacts (e.g., Amazon on both A/R and A/P) by creating a
 separate "(Vendor)" contact for the A/P side and updating local postings/TAs.
 
+A contact whose name is blank or whitespace is refused and reported under
+"refused". Contacts are auto-created from whatever name a posting carries, so a
+source row with an empty payee makes one. QuickBooks has no name for such a
+party, and the dual-use split would repoint ledger rows onto " (Vendor)".
+
 Usage:
     BOOKKEEPING_CONFIG_PATH=_local-bookkeeping/config.yaml \
       {python} {module_root}/adapters/qbo/sync_contacts.py [--dry_run]
@@ -140,6 +145,19 @@ def create_qbo_vendor(client, rate_limiter, display_name: str) -> Tuple[Optional
 # Contact Classification
 # =============================================================================
 
+def is_blank_name(name) -> bool:
+    """True for a name QuickBooks cannot use: None, empty, or whitespace only."""
+    return not (name or '').strip()
+
+
+def partition_blank_names(contacts: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+    """Split classified contacts into the ones the sync may act on and the blank ones."""
+    usable, blank = [], []
+    for contact in contacts:
+        (blank if is_blank_name(contact['name']) else usable).append(contact)
+    return usable, blank
+
+
 def classify_contacts(conn: sqlite3.Connection) -> List[Dict]:
     """
     Analyze all contacts and determine what QBO entity type they need.
@@ -233,7 +251,17 @@ def create_vendor_split(conn: sqlite3.Connection, contact_name: str, dry_run: bo
     """
     For a dual-use contact, create a "(Vendor)" variant and repoint A/P
     postings and payable TAs to the new contact name.
+
+    A blank source name is refused before any write. This reassigns existing ledger
+    rows, so the refusal lives in the function and any later caller inherits it.
     """
+    if is_blank_name(contact_name):
+        return {
+            'original': contact_name, 'vendor_name': None,
+            'refused': True, 'reason': 'blank_name_source',
+            'ap_postings_repointed': 0, 'payable_tas_repointed': 0,
+        }
+
     vendor_name = f"{contact_name} (Vendor)"
     cursor = conn.cursor()
 
@@ -282,17 +310,26 @@ def sync_contacts(client, rate_limiter, conn: sqlite3.Connection, dry_run: bool)
         'classified': 0, 'customers_created': 0, 'customers_existing': 0,
         'vendors_created': 0, 'vendors_existing': 0,
         'dual_use_splits': [], 'skipped': 0, 'errors': [], 'details': [],
+        'refused': [],
     }
 
-    contacts = classify_contacts(conn)
-    result['classified'] = len(contacts)
+    contacts, blank = partition_blank_names(classify_contacts(conn))
+    result['classified'] = len(contacts) + len(blank)
+    for c in blank:
+        result['refused'].append({'contact': c['name'], 'reason': 'blank_name'})
 
     for c in contacts:
         if c['dual_use']:
             split_info = create_vendor_split(conn, c['name'], dry_run)
-            result['dual_use_splits'].append(split_info)
+            if split_info.get('refused'):
+                result['refused'].append({'contact': c['name'],
+                                          'reason': split_info['reason']})
+            else:
+                result['dual_use_splits'].append(split_info)
 
-    contacts = classify_contacts(conn)
+    # The split adds contacts, so the classification is read again. Blank names were
+    # refused above and are dropped here without a second entry.
+    contacts, _ = partition_blank_names(classify_contacts(conn))
 
     existing_customers, cust_err = fetch_existing_customers(client, rate_limiter)
     if cust_err:
@@ -404,7 +441,9 @@ def main():
             result = sync_contacts(client, rate_limiter, conn, args.dry_run)
 
             output = {
-                "success": len(result['errors']) == 0,
+                # A refusal is work the sync would not do, so it fails the run the way
+                # an error does.
+                "success": len(result['errors']) == 0 and len(result['refused']) == 0,
                 "dry_run": args.dry_run,
                 "company": company_name,
                 "contacts_analyzed": result['classified'],
@@ -415,6 +454,7 @@ def main():
                 "dual_use_splits": result['dual_use_splits'],
                 "skipped": result['skipped'],
                 "errors": result['errors'],
+                "refused": result['refused'],
                 "details": result['details'],
             }
 
