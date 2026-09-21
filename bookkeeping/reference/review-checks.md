@@ -2,6 +2,8 @@
 
 Unified analytical procedures for the Review domain. All checks are read-only — no database writes. The agent runs each check, reasons about the results using business context (company overview, prior period data, materiality), and records findings to the workpaper.
 
+Checks 1 through 11 read the staging database. Check 12 reads the system of record, which is the only place its question can be answered.
+
 ## Checks
 
 ### 1. Imports Completeness
@@ -82,7 +84,19 @@ Suppress only the **specific** known exceptions listed in `review-notes.md`; don
 
 **Note — compute CM/VC remaining correctly:** a credit_memo/vendor_credit is consumed through two legitimate forms: **credit applications** (TAPs with `source_ta_id` = the CM/VC, applied against a target invoice/bill) and **direct/owner-cleared settlement** (TAPs with `trade_account_id` = the CM/VC and no `source_ta_id` — used when the credit settles through a clearing/owner account because funds moved outside business accounts, or a vendor refund arrives as a bank deposit; the publisher's owner-cleared phase publishes exactly this shape). Remaining is `amount_due − compute_consumed_amount` (which sums both forms). Counting only one form makes the other read as permanently open credit — a phantom subledger-to-GL variance that does not exist in the system of record. Prefer `list_open_items.py` — it already dispatches by type.
 
-### 12. Additional Local Steps
+### 12. Unclassed P&L Activity (system of record)
+
+**Intent:** The client reads "Profit and Loss by Class" in the system of record. Money sitting in that report's unclassed column belongs to no class, and the client sees it. The staging database cannot answer this. A record adopted from the SoR during a close carries a class on the local row while the SoR original has none, so the local side reads clean and the client's report is still wrong. A record staging never created carries no class at all.
+
+**Skip when the client does not use classes.** Every P&L line is then in that column and there is nothing to resolve. Classes in use is a client fact; `review-notes.md` records it.
+
+**Script:** `adapters/qbo/scan_unclassed_pl.py --period_start {periodStart} --period_end {periodEnd}` for QBO. Read-only: two report reads, no SoR writes, no local database. It reads ProfitAndLoss summarized by Classes on the accrual basis, then names the offending transactions from ProfitAndLossDetail.
+
+**Flag when:** any account carries activity in the unclassed column. The finding lists each account with its amount and each transaction with its date, type, document number, counterparty and SoR id.
+
+**Resolution:** stamp the class on the SoR record. The staging row already holds the right class, so reclassifying locally corrects the wrong side. This is a flag, not a Hard Stop: the gates that must clear before a period closes are listed in `quality-guidelines.md`, and this is not one of them.
+
+### 13. Additional Local Steps
 
 **Intent:** Extensibility hook for client-specific review procedures beyond the core checks.
 
