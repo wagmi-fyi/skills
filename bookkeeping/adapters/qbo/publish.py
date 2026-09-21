@@ -33,7 +33,8 @@ from _shared.client import (
 from _shared.sync_status import update_sync_error
 from _shared.common import (
     query_trade_accounts, group_postings_by_ta, query_trade_account_payments,
-    query_owner_cleared_payments, query_payout_consumed_credits
+    query_owner_cleared_payments, query_payout_consumed_credits,
+    find_bank_funded_payment_gaps
 )
 
 from _publishers.journal_entries import (
@@ -126,6 +127,7 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
         'invoice_count': 0, 'bill_count': 0, 'payment_count': 0, 'bill_payment_count': 0,
         'payout_consumed_credit_count': 0,
         'ta_contact_errors': [], 'payment_parent_errors': [], 'contact_mapping_errors': [],
+        'bank_funded_payment_gaps': [],
     }
 
     if client:
@@ -184,10 +186,10 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
         result['bill_payment_count'] = len(pay_pmts)
         result['owner_cleared_count'] = len(
             query_owner_cleared_payments(conn, sync_status, start_date, end_date))
-        # Consolidated payout-consumed-credit Payments (one per payout that consumes a CM
-        # within the payout — the bank-funded CM-consume fix). Count = distinct payouts.
+        # Consolidated consumed-credit Payments (one per deposit that consumes a CM inside
+        # itself). Count = distinct deposits.
         pcc_rows = query_payout_consumed_credits(conn, sync_status)
-        result['payout_consumed_credit_count'] = len({r['payout_id'] for r in pcc_rows})
+        result['payout_consumed_credit_count'] = len({r['group_key'] for r in pcc_rows})
 
         for row in recv_pmts + pay_pmts:
             if not row.get('ta_external_id'):
@@ -195,6 +197,13 @@ def run_dry_run(client, conn, postings, grouped_jes, publish_type, sync_status, 
                     'payment_id': row['tap_id'], 'trade_account_id': row['trade_account_id'],
                     'warning': 'Parent trade account not synced yet'
                 })
+
+    # Every bank-funded payment row must be claimed by a phase, and a deposit must be
+    # posted whole. A gap would post a wrong number, and it fails the run. The dry run and
+    # the live run check the same publish types.
+    if publish_type in ('all', 'payments'):
+        result['bank_funded_payment_gaps'] = find_bank_funded_payment_gaps(
+            conn, sync_status, start_date, end_date)
 
     return result
 
@@ -281,6 +290,7 @@ def main():
                 len(validation['balance_errors']) > 0 or
                 len(validation['class_ref_errors']) > 0 or
                 len(validation.get('ta_contact_errors', [])) > 0 or
+                len(validation.get('bank_funded_payment_gaps', [])) > 0 or
                 (validation['oauth_status'] == 'invalid' and credentials is not None)
             )
 
@@ -289,7 +299,8 @@ def main():
                 validation.get('contact_mapping_errors', []) +
                 validation['balance_errors'] +
                 validation['class_ref_errors'] +
-                validation.get('ta_contact_errors', [])
+                validation.get('ta_contact_errors', []) +
+                validation.get('bank_funded_payment_gaps', [])
             )
 
             result = {
@@ -308,7 +319,16 @@ def main():
             conn.close()
             sys.exit(0 if result['success'] else 1)
 
-        # Live publish
+        # Live publish. The bank-funded coverage check runs before anything posts. A
+        # dropped payment row or a deposit that cannot be one Payment would put a wrong
+        # number in QBO. It holds back the bank-funded payment phases and nothing else.
+        # Journal entries, invoices, bills and the credit documents carry no wrong number
+        # here.
+        payment_gaps = []
+        if publish_type in ('all', 'payments'):
+            payment_gaps = find_bank_funded_payment_gaps(
+                conn, args.sync_status, args.start_date, args.end_date)
+
         je_result = {"processed": 0, "failed": 0, "skipped": 0}
         inv_result = {"processed": 0, "failed": 0, "skipped": 0}
         bill_result = {"processed": 0, "failed": 0, "skipped": 0}
@@ -405,8 +425,9 @@ def main():
             ext_ids["credit_applications"] = eids
             all_errors.extend(errs)
 
-        # Phase 3: Bank-funded Payments and BillPayments
-        if publish_type in ('all', 'payments'):
+        # Phase 3: Bank-funded Payments and BillPayments. Held back when the coverage
+        # check found a row these phases cannot post whole.
+        if publish_type in ('all', 'payments') and not payment_gaps:
             p, f, s, errs, eids = publish_payments(
                 publish_client, rate_limiter, conn, _config, args.sync_status, args.start_date, args.end_date, ENV_PATH
             )
@@ -414,9 +435,9 @@ def main():
             ext_ids["payments"] = eids
             all_errors.extend(errs)
 
-            # Phase 3b: payout-keyed settlements that consume a CreditMemo within the payout
-            # (bank-funded CM-consume fix — one consolidated mixed-Line Payment, net of the CM).
-            # Disjoint from publish_payments above via the query_trade_account_payments exclusion.
+            # Phase 3b: deposits that consume a CreditMemo inside the deposit. One
+            # consolidated mixed-Line Payment per deposit, net of the credit. Disjoint from
+            # publish_payments above via the query_trade_account_payments exclusion.
             p, f, s, errs, eids = publish_payout_consumed_credits(
                 publish_client, rate_limiter, conn, _config, args.sync_status, args.start_date, args.end_date, ENV_PATH
             )
@@ -445,13 +466,15 @@ def main():
 
         conn.close()
 
+        all_errors.extend(payment_gaps)
+
         all_results = [je_result, inv_result, bill_result, cm_result, vc_result,
                        capp_result, pay_result, pcc_result, bp_result, oc_result]
         total_failed = sum(r["failed"] for r in all_results)
         total_skipped = sum(r["skipped"] for r in all_results)
 
         result = {
-            "success": total_failed == 0 and total_skipped == 0,
+            "success": total_failed == 0 and total_skipped == 0 and not payment_gaps,
             "dry_run": False,
             "jes": je_result, "invoices": inv_result, "bills": bill_result,
             "credit_memos": cm_result, "vendor_credits": vc_result,

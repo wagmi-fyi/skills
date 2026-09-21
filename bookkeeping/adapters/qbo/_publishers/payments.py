@@ -21,7 +21,8 @@ from _shared.auth import resolve_client
 from _shared.client import save_tokens_if_available
 from _shared.common import (
     query_trade_account_payments, publish_single_qbo_object,
-    query_settlement_credit_apps, query_payout_consumed_credits
+    query_settlement_credit_apps, query_payout_consumed_credits,
+    check_consumed_credit_group, CONSUMED_CREDIT_REFUSALS
 )
 from _shared.locate import make_tag, confirm_payment_lines_applied
 from _shared.sync_status import update_sync_success, update_sync_error, update_sync_ignore
@@ -419,21 +420,22 @@ def publish_payout_consumed_credits(
     end_date: Optional[str],
     env_path: str
 ) -> Tuple[int, int, int, List[Dict], List[str]]:
-    """Publish payout-keyed settlements that consume a CreditMemo within the payout.
+    """Publish deposits that consume a CreditMemo inside the deposit.
 
-    Design (b), the bank-funded CM-consume fix. A payout-keyed
-    channel (e.g. Shopify) settles a chargeback/return CreditMemo *inside* the payout deposit:
-    the payout's invoice-collection TAPs are GROSS (full invoice face) and a separate bank-funded
-    CM-consume TAP (parent type=credit_memo) carries the credit. Emit ONE consolidated mixed-Line
-    Payment per payout — TotalAmt = SUM(gross R) - SUM(CM), Line = N Invoice (face) + M CreditMemo —
-    so the bank nets and the CM applies (Balance 0). Detection + grouping live in
-    common.query_payout_consumed_credits (group key = parent-TA payout_id; the rows are made
-    disjoint from publish_payments' singleton/settlement path by the NOT EXISTS clause in
-    query_trade_account_payments, so nothing double-publishes).
+    One bank line pays several invoices while a credit memo reduces the cash: the
+    invoice-collection TAPs are GROSS (full invoice face) and a separate bank-funded
+    CM-consume TAP (parent type=credit_memo) carries the credit. A batching channel
+    (e.g. Shopify) settling a chargeback inside a payout is the same shape. Emit ONE
+    consolidated mixed-Line Payment per deposit, with TotalAmt = SUM(gross R) - SUM(CM) and
+    Line = N Invoice (face) + M CreditMemo, so the bank nets and the CM applies
+    (Balance 0). Detection and grouping live in common.query_payout_consumed_credits,
+    on common.deposit_group_key; the rows are made disjoint from publish_payments'
+    singleton/settlement path by the NOT EXISTS clause in query_trade_account_payments,
+    so nothing double-publishes.
 
     Reuses the proven mixed-Line Payment builder (create without Line[] -> sparse Line[] update ->
     confirm_payment_lines_applied post-then-fail guard) used by the settlement_id path above, but
-    nets at the PAYOUT level: the CM is not pre-attributed to any invoice, so deposit = SUM R - SUM CM
+    nets at the DEPOSIT level: the CM is not pre-attributed to any invoice, so deposit = SUM R - SUM CM
     (the existing settlement path's R-TAPs are already net-of-CM cash). Uses the real CM TA via its
     parent's external_id — never synthesizes a credit from clearing-JE postings (principle 11).
 
@@ -450,76 +452,44 @@ def publish_payout_consumed_credits(
     def _meta(row):
         return json.loads(row['tap_metadata']) if row.get('tap_metadata') else {}
 
-    # Group by payout_id (parent-TA metadata). Each group = one consolidated Payment.
+    # Group by the deposit key. Each group = one consolidated Payment.
     groups = defaultdict(list)
     for row in rows:
-        groups[row['payout_id']].append(row)
+        groups[row['group_key']].append(row)
 
-    for payout_id, group in groups.items():
+    for group_key, group in groups.items():
+        # The group-level refusals live in common.check_consumed_credit_group. The publisher
+        # and the gate call the same function.
+        refusal = check_consumed_credit_group(conn, group_key, group)
+        if refusal:
+            code, err_msg = refusal
+            for r in group:
+                errors.append({'payment_id': r['tap_id'], 'error_code': code,
+                               'error_message': err_msg})
+                update_sync_error(conn, 'trade_account_payments', r['tap_id'], code)
+            # A group with an unknown refusal code counts as failed. A KeyError here would
+            # stop a run mid-way with earlier groups already posted.
+            if CONSUMED_CREDIT_REFUSALS.get(code, 'failed') == 'failed':
+                failed += len(group)
+            else:
+                skipped += len(group)
+            continue
+
         inv_rows = [r for r in group if r['role'] == 'invoice']
         cm_rows = [r for r in group if r['role'] == 'credit']
-
-        # Completeness: a consumed-credit payout must carry >=1 invoice AND >=1 credit TAP.
-        # (The selection guarantees a credit exists; this also catches a date/sync split that
-        # left the group without invoices — fail loud rather than emit a CM-only Payment.)
-        if not inv_rows or not cm_rows:
-            err_msg = (f'Payout {payout_id}: incomplete consumed-credit group '
-                       f'({len(inv_rows)} invoice / {len(cm_rows)} credit TAP) — refusing to publish')
-            for r in group:
-                errors.append({'payment_id': r['tap_id'], 'error_code': 'PAYOUT_GROUP_INCOMPLETE',
-                               'error_message': err_msg})
-                update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'PAYOUT_GROUP_INCOMPLETE')
-                skipped += 1
-            continue
-
-        # Pre-flight: partially-published payout. If any bank-funded TAP for this payout is
-        # already synced (a prior partial run), consolidating the remainder would emit a deposit
-        # smaller than the real bank line. Fail loud — mirrors the settlement_id guard.
-        already_synced = conn.execute("""
-            SELECT COUNT(*) FROM trade_account_payments tap
-            JOIN trade_accounts ta ON tap.trade_account_id = ta.id
-            WHERE tap.source_ta_id IS NULL AND tap.import_id IS NOT NULL
-              AND ta.type IN ('receivable', 'credit_memo')
-              AND json_extract(ta.metadata, '$.payout_id') = ?
-              AND json_extract(tap.sync, '$.external_id') IS NOT NULL
-        """, (payout_id,)).fetchone()[0]
-        if already_synced > 0:
-            err_msg = (f'Payout {payout_id}: {already_synced} bank-funded TAP(s) already synced; '
-                       f'cannot consolidate remainder. Manual reconciliation required.')
-            for r in group:
-                errors.append({'payment_id': r['tap_id'], 'error_code': 'PAYOUT_PARTIALLY_PUBLISHED',
-                               'error_message': err_msg})
-                update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'PAYOUT_PARTIALLY_PUBLISHED')
-                skipped += 1
-            continue
-
-        # Pre-flight: uniformity. The consolidated Payment uses first_row for bank, customer and
-        # date — a heterogeneous group (config drift, mistag) would silently post the GL wrong.
-        banks = {r['payment_account_remote_id'] for r in group if r.get('payment_account_remote_id')}
-        customers = {r['contact_remote_id'] for r in group if r.get('contact_remote_id')}
-        dates = {r['payment_date'] for r in group}
-        if len(banks) > 1 or len(customers) > 1 or len(dates) > 1:
-            err_msg = (f'Payout {payout_id}: group has {len(banks)} bank(s), '
-                       f'{len(customers)} customer(s), {len(dates)} date(s) — refusing to consolidate.')
-            for r in group:
-                errors.append({'payment_id': r['tap_id'], 'error_code': 'PAYOUT_GROUP_HETEROGENEOUS',
-                               'error_message': err_msg})
-                update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'PAYOUT_GROUP_HETEROGENEOUS')
-                skipped += 1
-            continue
 
         # Pre-flight: every Invoice (R parent) and CreditMemo (credit parent) must have an external_id.
         any_missing = False
         for r in inv_rows:
             if not r.get('ta_external_id'):
                 errors.append({'payment_id': r['tap_id'], 'error_code': 'PARENT_TA_NOT_SYNCED',
-                               'error_message': f'Payout {payout_id}: invoice TA not yet published'})
+                               'error_message': f'Deposit {group_key}: invoice TA not yet published'})
                 skipped += 1
                 any_missing = True
         for r in cm_rows:
             if not r.get('ta_external_id'):
                 errors.append({'payment_id': r['tap_id'], 'error_code': 'SOURCE_CM_NOT_SYNCED',
-                               'error_message': f'Payout {payout_id}: CreditMemo TA not yet published'})
+                               'error_message': f'Deposit {group_key}: CreditMemo TA not yet published'})
                 skipped += 1
                 any_missing = True
         if any_missing:
@@ -532,8 +502,8 @@ def publish_payout_consumed_credits(
             skipped += 1
             continue
 
-        # Aggregate Lines per QBO TxnId. R-TAPs are GROSS (full invoice face); the CM is NOT
-        # pre-attributed to any invoice — it nets the cash at the payout level. So each Invoice
+        # Aggregate Lines per QBO TxnId. R-TAPs are GROSS (full invoice face). The CM is NOT
+        # pre-attributed to any invoice. It nets the cash at the deposit level. So each Invoice
         # Line = SUM of that invoice's R-TAP face, and deposit (cash) = SUM Invoice - SUM CM.
         invoice_amounts = defaultdict(int)   # invoice external_id -> cents (face)
         for r in inv_rows:
@@ -549,21 +519,12 @@ def publish_payout_consumed_credits(
         # Pre-flight invariant: SUM Invoice Lines == deposit + SUM CM Lines. QBO is an external
         # boundary; bad arithmetic = a malformed Payment we can't easily back out of.
         if sum_invoice_cents != deposit_cents + sum_cm_cents:
-            err_msg = (f'Payout {payout_id}: SUM Invoice ({sum_invoice_cents}) != '
+            err_msg = (f'Deposit {group_key}: SUM Invoice ({sum_invoice_cents}) != '
                        f'deposit ({deposit_cents}) + SUM CM ({sum_cm_cents})')
             for r in group:
                 errors.append({'payment_id': r['tap_id'], 'error_code': 'LINE_SUM_MISMATCH',
                                'error_message': err_msg})
                 update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'LINE_SUM_MISMATCH')
-            failed += len(group)
-            continue
-
-        if deposit_cents <= 0:
-            err_msg = f'Payout {payout_id}: deposit_cents={deposit_cents} not > 0 (SUM CM >= SUM R)'
-            errors.append({'payment_id': first_row['tap_id'], 'error_code': 'PAYOUT_NEGATIVE_NET',
-                           'error_message': err_msg})
-            for r in group:
-                update_sync_error(conn, 'trade_account_payments', r['tap_id'], 'PAYOUT_NEGATIVE_NET')
             failed += len(group)
             continue
 
@@ -578,16 +539,17 @@ def publish_payout_consumed_credits(
             payment.DepositToAccountRef = dep
         else:
             errors.append({'payment_id': first_row['tap_id'], 'error_code': 'DEPOSIT_ACCOUNT_MISSING',
-                           'error_message': f'Payout {payout_id}: deposit bank account not resolved'})
+                           'error_message': f'Deposit {group_key}: deposit bank account not resolved'})
             failed += len(group)
             continue
 
         n_invoices = len(invoice_amounts)
         n_cms = len(cm_amounts)
         # Idempotency tag + locator for the post-then-fail read-back (see _shared/locate.py).
-        payment.PrivateNote = (f"Payout {payout_id} — {n_invoices} invoices + "
-                               f"{n_cms} credit memos (CM consumed within payout) {make_tag(payout_id)}")
-        payment._bk_locator = {'entity': 'Payment', 'tag': make_tag(payout_id),
+        payment.PrivateNote = (f"Deposit {group_key} — {n_invoices} invoices + "
+                               f"{n_cms} credit memos (CM consumed within the deposit) "
+                               f"{make_tag(group_key)}")
+        payment._bk_locator = {'entity': 'Payment', 'tag': make_tag(group_key),
                                'txn_date': first_row['payment_date'],
                                'total': round(deposit_cents / 100.0, 2)}
 
@@ -641,8 +603,8 @@ def publish_payout_consumed_credits(
         external_ids.append(ext_id)
         processed += len(group)
 
-        # Mark the payout's clearing JE(s) sync='ignore' — the QBO Payment carries the same
-        # accounting (the local clearing JE already nets the bank).
+        # Mark the deposit's clearing JE(s) sync='ignore'. The QBO Payment carries the same
+        # accounting, since the local clearing JE already nets the bank.
         clearing_je_ids = {_meta(r).get('clearing_je_id') for r in group}
         for cje in clearing_je_ids:
             if cje:

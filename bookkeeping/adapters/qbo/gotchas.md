@@ -36,18 +36,38 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   final state would be valid. Build the complete line set and save once. (Publisher fix tracked in
   the relevant client's publisher-gaps notes.)
 
-- **`--allow_mixed_credit` settlements net the CM only for `settlement_id`-keyed channels; `payout_id`
-  channels (Shopify) silently skip it.** The consolidated mixed-payment path (`query_settlement_credit_apps`
-  in `_publishers/payments.py`) pulls the CM-consume TAP by `metadata.settlement_id`. A payout_id-keyed
-  channel has no settlement_id → the bank-funded CM-consume TAP (parent type=`credit_memo`, `import_id` set)
-  matches no publisher phase → left `pending`; the invoice Payments then post at FULL face (over-depositing
-  the bank by ΣCM) and the CreditMemo publishes but FLOATS unapplied (`RemainingCredit` = ΣCM). Symptom: one
-  stubborn pending TAP whose parent is a credit_memo + a floating CM + bank over by exactly the CM total.
-  Manual remediation: net the CM into ONE of the settlement's QBO Payments via a sparse update —
-  `TotalAmt = ΣR − ΣCM`, `Line = [Invoice LinkedTxn(face), CreditMemo LinkedTxn(face)]` (CustomerRef AND
-  DepositToAccountRef are required even on a sparse Payment update) → invoice stays Balance 0, bank drops by
-  ΣCM, CM Balance→0; then set the local CM-consume TAP `sync=ignore`. Forward fix: the consolidated-payment
-  grouping must also key on `payout_id`.
+- **A deposit that consumes a credit memo posts as ONE Payment, net of the credit.** The credit
+  arrives as a bank-funded CM-consume TAP: parent `type = 'credit_memo'`, `source_ta_id` NULL,
+  `import_id` set. Phase 3b emits `TotalAmt = ΣR − ΣCM` with one Invoice line per invoice at face
+  plus one CreditMemo line. The group key is `deposit_group_key` in `_shared/common.py`: the
+  parent's `payout_id` where a batching channel stamps one, otherwise the payment's `import_id`
+  and the parent's contact. One bank line paying two customers is two Payments. A settlement keeps
+  its own path, because its invoice payments already carry cash net of the credit.
+
+- **A bank-funded payment row no phase can post whole holds back the payment phases.**
+  `find_bank_funded_payment_gaps` names each row by id, in the dry run and the live run, before
+  anything posts. `PAYMENT_MATCHES_NO_PHASE`: no selection reads the row, and a bank-funded vendor
+  credit is the case to expect. `DEPOSIT_GROUP_SPLIT`: a credit memo and the invoices it reduces
+  carry different keys, so the invoices would post at full face. The codes of
+  `check_consumed_credit_group`: the deposit cannot become one Payment. Both docstrings carry the
+  detail. Every other phase publishes, and the run reports `success: false` with each gap in
+  `errors`. Most gaps are a metadata fix: give the credit memo and its invoices one contact and
+  one key, then run again. A row no metadata change can route has no remedy in the skill
+  today, and that book publishes no bank-funded payments until the row is dealt with. Raise it.
+
+- **A book whose invoices already posted at full face shows one credit memo in
+  `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit, the
+  CreditMemo floats at `RemainingCredit` equal to its face, and its payment row is still pending.
+  The publisher cannot net a deposit whose invoices are already posted. Repair it by hand with the
+  recipe below. Later deposits then publish whole on their own.
+
+- **Netting a credit into a Payment that already posted.** One sparse update on ONE of the
+  deposit's QBO Payments: `TotalAmt = ΣR − ΣCM`, `Line = [Invoice LinkedTxn(face), CreditMemo
+  LinkedTxn(face)]`. `CustomerRef` and `DepositToAccountRef` are both required on that update even
+  though neither changes. The invoice stays at Balance 0, the bank drops by ΣCM, and the
+  CreditMemo goes to Balance 0. Then set the local credit-memo payment row to `sync=ignore`, so no
+  later run publishes it. This answers `PAYOUT_PARTIALLY_PUBLISHED`, whose message asks for manual
+  reconciliation.
 
 ## Errors that lie
 

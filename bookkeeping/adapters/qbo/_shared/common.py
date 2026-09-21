@@ -120,6 +120,32 @@ def publish_single_qbo_object(client, rate_limiter, qbo_obj, env_path: str) -> T
 # Trade Account Queries
 # =============================================================================
 
+def deposit_group_key(ta_alias: str, tap_alias: str) -> str:
+    """SQL for the key that names one consolidated Payment, given a parent-TA and TAP alias.
+
+    A channel that pays out in batches stamps a payout_id on the parent trade account, and
+    that id names the group. It is read first, so a payout-keyed row groups on the payout
+    whatever the payment's settlement_id says. An import can span more than one payout.
+
+    A plain ACH or wire deposit carries no channel key. There the import is the bank line,
+    since an imports row is one source transaction, and the key is the import id with the
+    contact. A QBO Payment carries one customer, so one bank line paying two customers is
+    two Payments.
+
+    A settlement-keyed payment with no payout id gets NULL, which matches nothing. Its cash
+    is already net of the credit, and publish_payments consolidates it by settlement_id.
+    find_bank_funded_payment_gaps reports a bank-funded credit memo in such an import.
+
+    An empty payout id counts as absent.
+
+    Every query that needs this key builds it with this function, so the selection and its
+    exclusion stay complements.
+    """
+    return (f"COALESCE(NULLIF(json_extract({ta_alias}.metadata, '$.payout_id'), ''), "
+            f"CASE WHEN json_extract({tap_alias}.metadata, '$.settlement_id') IS NULL "
+            f"THEN 'import:' || {tap_alias}.import_id || '|' || {ta_alias}.contact END)")
+
+
 def query_trade_accounts(
     conn: sqlite3.Connection,
     sync_status: str,
@@ -218,24 +244,30 @@ def query_trade_account_payments(
         "json_extract(tap.sync, '$.status') = ?",
         "json_extract(tap.sync, '$.external_id') IS NULL",
         "tap.source_ta_id IS NULL",  # bank-funded only; credit applications go through credit_applications publisher
-        # Disjointness: exclude bank-funded receivable TAPs that belong to a payout which
-        # consumes a CreditMemo *within* the payout (a bank-funded CM-consume TAP — parent
-        # type=credit_memo, source_ta_id NULL, import_id set, no settlement_id). Those publish
-        # as ONE consolidated mixed-Line Payment NET of the CM via
+        # Disjointness: exclude bank-funded receivable TAPs that belong to a deposit which
+        # consumes a CreditMemo *inside* the deposit. Such a TAP has parent
+        # type=credit_memo, source_ta_id NULL and import_id set. Those publish as ONE
+        # consolidated mixed-Line Payment NET of the CM via
         # _publishers/payments.publish_payout_consumed_credits — NOT as gross singletons here.
-        # No-op for any payout without such a TAP. Group key = payout_id.
-        """NOT EXISTS (
+        # No-op for any deposit without such a TAP. The key comes from deposit_group_key(),
+        # the same expression query_payout_consumed_credits selects on.
+        #
+        # The two tests in front of the NOT EXISTS mirror that selection exactly: it takes
+        # receivable and credit_memo parents and it requires an import, so only such a row can
+        # be excluded here. A payable on the same bank line publishes as a BillPayment and the
+        # bank nets across the two objects. A row with no import belongs to no deposit.
+        # Excluding either would leave it with no phase at all.
+        f"""(ta.type NOT IN ('receivable', 'credit_memo') OR tap.import_id IS NULL OR NOT EXISTS (
             SELECT 1 FROM trade_account_payments cmtap
             JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
             WHERE cmta.type = 'credit_memo'
               AND cmtap.source_ta_id IS NULL
               AND cmtap.import_id IS NOT NULL
               AND cmta.voided_at IS NULL
-              AND json_extract(cmta.metadata, '$.payout_id') IS NOT NULL
-              AND json_extract(cmta.metadata, '$.payout_id') = json_extract(ta.metadata, '$.payout_id')
+              AND {deposit_group_key('cmta', 'cmtap')} = {deposit_group_key('ta', 'tap')}
               AND json_extract(cmtap.sync, '$.status') = ?
               AND json_extract(cmtap.sync, '$.external_id') IS NULL
-        )""",
+        ))""",
     ]
     params = [sync_status, sync_status]
 
@@ -413,23 +445,24 @@ def query_payout_consumed_credits(
     conn: sqlite3.Connection,
     sync_status: str,
 ) -> List[Dict]:
-    """Fetch bank-funded TAPs for payouts that consume a CreditMemo *within* the payout.
+    """Fetch bank-funded TAPs for deposits that consume a CreditMemo *inside* the deposit.
 
-    A payout-keyed channel (e.g. Shopify)
-    can settle a chargeback/return CreditMemo inside the payout deposit. The credit arrives
-    as a **bank-funded CM-consume TAP** — parent trade_account type='credit_memo',
-    source_ta_id NULL, import_id set — carrying NO settlement_id (the channel groups by
-    payout_id, stored on the parent TA's metadata, not the TAP). Such a TAP matches no other
-    publish phase (query_trade_account_payments filters parent type receivable/payable;
+    A customer can pay part of an invoice with a credit memo, and a batching channel
+    (e.g. Shopify) can settle a chargeback or return inside a payout. Either way the bank
+    receives the net and the credit arrives as a **bank-funded CM-consume TAP**, whose parent
+    trade_account has type='credit_memo', source_ta_id NULL and import_id set. Such a TAP
+    matches no other publish phase (query_trade_account_payments filters parent type
+    receivable/payable;
     query_credit_applications needs source_ta_id; query_owner_cleared_payments needs
     import_id NULL; query_settlement_credit_apps needs application_method='settlement_payment'),
-    so it sits pending forever while the payout's invoice Payments post GROSS and the CM floats.
+    so on its own it sits pending forever while the deposit's invoice Payments post GROSS and
+    the CM floats.
 
-    Returns ALL bank-funded TAPs (parent receivable + credit_memo) for every payout_id that
-    contains >=1 such CM-consume TAP, so payments.publish_payout_consumed_credits can emit ONE
-    consolidated mixed-Line Payment per payout: TotalAmt = SUM(gross R) - SUM(CM), Lines =
-    N Invoice (at gross face) + M CreditMemo. **The R-TAPs here are GROSS (full invoice face)**;
-    the CM is not pre-attributed to any invoice — it nets the cash at the payout level, so the
+    Returns ALL bank-funded TAPs (parent receivable + credit_memo) for every deposit that
+    holds >=1 such CM-consume TAP, so payments.publish_payout_consumed_credits can emit ONE
+    consolidated mixed-Line Payment per deposit: TotalAmt = SUM(gross R) - SUM(CM), Lines =
+    N Invoice (at gross face) + M CreditMemo. **The R-TAPs here are GROSS (full invoice face)**.
+    The CM is not pre-attributed to any invoice. It nets the cash at the deposit level, so the
     deposit = SUM R - SUM CM. (This differs from query_settlement_credit_apps, where the R-TAPs
     are already net-of-CM cash and the credit is a separate settlement_payment credit-app TAP.)
 
@@ -437,12 +470,16 @@ def query_payout_consumed_credits(
     ta_external_id is the parent's QBO id (Invoice id for 'invoice', CreditMemo id for 'credit');
     a NULL signals an unsynced parent -> the publisher pre-flight fails loud.
 
-    Group key = parent-TA **payout_id**, NOT import_id (an import can span >1 payout). Scoped by
-    sync_status only (not date): the row set must stay identical to the query_trade_account_payments
-    disjointness exclusion above, so no TAP is ever both consolidated here and posted as a singleton.
+    Group key = deposit_group_key(), returned as 'group_key'. Scoped by sync_status only
+    (not date): the row set must stay identical to the query_trade_account_payments
+    disjointness exclusion above, so no TAP is ever both consolidated here and posted as a
+    singleton. A deposit whose rows split across two keys publishes nothing:
+    find_bank_funded_payment_gaps refuses the run before any of it posts.
     """
     cursor = conn.cursor()
-    query = """
+    key = deposit_group_key('ta', 'tap')
+    cm_key = deposit_group_key('cmta', 'cmtap')
+    query = f"""
         SELECT
             tap.id AS tap_id,
             tap.amount,
@@ -451,7 +488,7 @@ def query_payout_consumed_credits(
             ta.type AS parent_type,
             CASE ta.type WHEN 'credit_memo' THEN 'credit' ELSE 'invoice' END AS role,
             ta.contact AS ta_contact,
-            json_extract(ta.metadata, '$.payout_id') AS payout_id,
+            {key} AS group_key,
             json_extract(ta.sync, '$.external_id') AS ta_external_id,
             c.remote_id AS contact_remote_id,
             coa.remote_id AS payment_account_remote_id
@@ -465,23 +502,208 @@ def query_payout_consumed_credits(
           AND ta.voided_at IS NULL
           AND json_extract(tap.sync, '$.status') = ?
           AND json_extract(tap.sync, '$.external_id') IS NULL
-          AND json_extract(ta.metadata, '$.payout_id') IS NOT NULL
-          AND json_extract(ta.metadata, '$.payout_id') IN (
-                SELECT json_extract(cmta.metadata, '$.payout_id')
+          AND {key} IN (
+                SELECT {cm_key}
                 FROM trade_account_payments cmtap
                 JOIN trade_accounts cmta ON cmtap.trade_account_id = cmta.id
                 WHERE cmta.type = 'credit_memo'
                   AND cmtap.source_ta_id IS NULL
                   AND cmtap.import_id IS NOT NULL
                   AND cmta.voided_at IS NULL
-                  AND json_extract(cmta.metadata, '$.payout_id') IS NOT NULL
                   AND json_extract(cmtap.sync, '$.status') = ?
                   AND json_extract(cmtap.sync, '$.external_id') IS NULL
           )
-        ORDER BY payout_id, role, tap.id
+        ORDER BY group_key, role, tap.id
     """
     cursor.execute(query, (sync_status, sync_status))
     return [dict(row) for row in cursor.fetchall()]
+
+
+# How the publisher counts each refusal. A skipped row stays retryable. A failed row is one
+# the publisher priced and could not post. Each refusal needs a person to change the data
+# before the next run selects the group again.
+CONSUMED_CREDIT_REFUSALS = {
+    'PAYOUT_GROUP_INCOMPLETE': 'skipped',
+    'PAYOUT_PARTIALLY_PUBLISHED': 'skipped',
+    'PAYOUT_GROUP_HETEROGENEOUS': 'skipped',
+    'PAYOUT_NEGATIVE_NET': 'failed',
+}
+
+
+def check_consumed_credit_group(
+    conn: sqlite3.Connection,
+    group_key: str,
+    group: List[Dict],
+) -> Optional[Tuple[str, str]]:
+    """Return the first refusal for one consumed-credit group, or None.
+
+    Covers the refusals that do not depend on how far a publish run has got. The pre-publish
+    gate can therefore ask before anything posts and get the answer the publisher would give.
+
+    This function does not test for a parent trade account that is not published yet. The
+    gate runs before the invoice phase, so an unsynced parent is the ordinary state at that
+    moment, and the publisher treats it as retryable.
+    """
+    inv_rows = [r for r in group if r['role'] == 'invoice']
+    cm_rows = [r for r in group if r['role'] == 'credit']
+
+    # Completeness: a consumed-credit deposit must carry >=1 invoice AND >=1 credit TAP.
+    # The selection guarantees a credit. This test catches a group whose invoices went
+    # elsewhere, so no CM-only Payment is ever built.
+    if not inv_rows or not cm_rows:
+        return ('PAYOUT_GROUP_INCOMPLETE',
+                f'Deposit {group_key}: incomplete consumed-credit group '
+                f'({len(inv_rows)} invoice / {len(cm_rows)} credit TAP). Refusing to publish.')
+
+    # Partially published: consolidating the remainder would emit a deposit smaller than
+    # the real bank line. The settlement_id guard tests the same thing.
+    already_synced = conn.execute(f"""
+        SELECT COUNT(*) FROM trade_account_payments tap
+        JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
+        WHERE tap.source_ta_id IS NULL AND tap.import_id IS NOT NULL
+          AND ta.type IN ('receivable', 'credit_memo')
+          AND {deposit_group_key('ta', 'tap')} = ?
+          AND json_extract(tap.sync, '$.external_id') IS NOT NULL
+    """, (group_key,)).fetchone()[0]
+    if already_synced > 0:
+        return ('PAYOUT_PARTIALLY_PUBLISHED',
+                f'Deposit {group_key}: {already_synced} bank-funded TAP(s) already synced; '
+                f'cannot consolidate remainder. Manual reconciliation required.')
+
+    # Uniformity: the Payment takes its bank, customer and date from one row of the group.
+    banks = {r['payment_account_remote_id'] for r in group if r.get('payment_account_remote_id')}
+    customers = {r['contact_remote_id'] for r in group if r.get('contact_remote_id')}
+    dates = {r['payment_date'] for r in group}
+    if len(banks) > 1 or len(customers) > 1 or len(dates) > 1:
+        return ('PAYOUT_GROUP_HETEROGENEOUS',
+                f'Deposit {group_key}: group has {len(banks)} bank(s), '
+                f'{len(customers)} customer(s), {len(dates)} date(s). Refusing to consolidate.')
+
+    deposit_cents = sum(r['amount'] for r in inv_rows) - sum(r['amount'] for r in cm_rows)
+    if deposit_cents <= 0:
+        return ('PAYOUT_NEGATIVE_NET',
+                f'Deposit {group_key}: deposit_cents={deposit_cents} not > 0 (SUM CM >= SUM R)')
+
+    return None
+
+
+def find_bank_funded_payment_gaps(
+    conn: sqlite3.Connection,
+    sync_status: str,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> List[Dict]:
+    """Report every bank-funded TAP the publish phases would not post whole.
+
+    A bank-funded TAP (source_ta_id NULL, import_id set) reaches QBO through exactly two
+    selections: query_trade_account_payments, once per parent type, and
+    query_payout_consumed_credits. A row neither one takes stays pending and no count
+    includes it. The run still reports success. The publish completeness rule in
+    reference/quality-guidelines.md calls that a failure, so this turns it into a stop.
+
+    The gaps, each in the publisher's error form:
+
+    PAYMENT_MATCHES_NO_PHASE means the row matches no selection. It is a parent type or a
+    metadata shape no phase reads, such as a bank-funded vendor credit.
+
+    DEPOSIT_GROUP_SPLIT means a consumed-credit group keyed on its import shares that import
+    and contact with a bank-funded receivable or credit-memo row that no consumed-credit group
+    holds. The credit and the invoices it reduces would land in different groups, so the
+    invoices would post at gross and the bank would be over by the credit. The data does not
+    say which key is right, so the run stops and a person decides.
+
+    Every code in CONSUMED_CREDIT_REFUSALS is a gap too. check_consumed_credit_group tests
+    them, and the publisher calls the same function, so a clean report means the
+    consumed-credit phase will not refuse.
+
+    Call it before anything publishes. Returns [] when every bank-funded row is accounted
+    for and every deposit can be posted whole.
+    """
+    cursor = conn.cursor()
+    where = [
+        "json_extract(tap.sync, '$.status') = ?",
+        "json_extract(tap.sync, '$.external_id') IS NULL",
+        "tap.source_ta_id IS NULL",
+        "tap.import_id IS NOT NULL",
+    ]
+    params = [sync_status]
+    if start_date:
+        where.append("tap.payment_date >= ?")
+        params.append(start_date)
+    if end_date:
+        where.append("tap.payment_date <= ?")
+        params.append(end_date)
+
+    eligible = {
+        row['tap_id']: row
+        for row in (dict(r) for r in cursor.execute(f"""
+            SELECT tap.id AS tap_id, tap.import_id, ta.type AS parent_type, ta.contact
+            FROM trade_account_payments tap
+            INNER JOIN trade_accounts ta ON tap.trade_account_id = ta.id AND ta.voided_at IS NULL
+            WHERE {" AND ".join(where)}
+        """, params).fetchall())
+    }
+
+    consumed = query_payout_consumed_credits(conn, sync_status)
+    selected_consumed = {r['tap_id'] for r in consumed}
+    selected = set(selected_consumed)
+    for ta_type in ('receivable', 'payable'):
+        selected |= {r['tap_id'] for r in query_trade_account_payments(
+            conn, sync_status, start_date, end_date, ta_type=ta_type)}
+
+    gaps = [
+        {'payment_id': tap_id,
+         'error_code': 'PAYMENT_MATCHES_NO_PHASE',
+         'error_message': (f"Bank-funded payment {tap_id} (parent type '{row['parent_type']}') "
+                           f"matches no publish phase. It would stay pending and the deposit "
+                           f"would post short.")}
+        for tap_id, row in sorted(eligible.items())
+        if tap_id not in selected
+    ]
+
+    # An import-keyed group must hold every bank-funded receivable and credit-memo TAP of
+    # its import and contact that no other consumed group already holds. A row in a group of
+    # its own is posted whole there, so two deposits on one bank line pass. A payable sibling
+    # passes. It publishes as a BillPayment, and the bank nets across the two objects.
+    # Another customer's row passes, since it is its own Payment.
+    import_keys = set()
+    for row in consumed:
+        key = row['group_key'] or ''
+        if key.startswith('import:') and row['tap_id'] in eligible:
+            import_id, _, contact = key[len('import:'):].partition('|')
+            import_keys.add((import_id, contact))
+    by_import_contact = defaultdict(list)
+    for tap_id, row in sorted(eligible.items()):
+        if row['parent_type'] in ('receivable', 'credit_memo'):
+            by_import_contact[(row['import_id'], row['contact'])].append(tap_id)
+    for import_id, contact in sorted(import_keys):
+        for tap_id in by_import_contact.get((import_id, contact), ()):
+            if tap_id not in selected_consumed:
+                gaps.append({
+                    'payment_id': tap_id,
+                    'error_code': 'DEPOSIT_GROUP_SPLIT',
+                    'error_message': (
+                        f"Bank-funded payment {tap_id} belongs to the same bank line and "
+                        f"contact as a consumed-credit deposit keyed on import {import_id}, "
+                        f"but it is keyed differently, so it sits outside the group. The "
+                        f"credit and the invoices it reduces must share one key.")})
+
+    # The gate tests each group with the function the publisher uses. The selection carries
+    # no date window, so the gate tests only a group that holds a row this run would publish.
+    by_group = defaultdict(list)
+    for row in consumed:
+        by_group[row['group_key']].append(row)
+    for group_key, group in sorted(by_group.items(), key=lambda kv: str(kv[0])):
+        if not any(r['tap_id'] in eligible for r in group):
+            continue
+        refusal = check_consumed_credit_group(conn, group_key, group)
+        if refusal:
+            code, message = refusal
+            for row in group:
+                gaps.append({'payment_id': row['tap_id'], 'error_code': code,
+                             'error_message': message})
+
+    return gaps
 
 
 def query_settlement_credit_apps(
