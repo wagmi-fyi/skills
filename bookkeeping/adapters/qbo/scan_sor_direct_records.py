@@ -65,8 +65,7 @@ voided) STILL surfaces — that is the whole point of HS7.
 
 ## Entity coverage
 Scans every transaction entity the publisher tags. It also scans four types the publisher
-never creates, so any of them in the window is inherently a direct record and always
-surfaces:
+never creates, so every one of them in the window is a direct record and surfaces:
 
   Deposit          a bank-feed or hand-keyed deposit.
   Purchase         a directly-entered check, expense or credit-card charge.
@@ -84,9 +83,9 @@ and the Deposit that clears it is another, so the count and the total read highe
 money at stake. The same pairing already holds for a Payment and its Deposit. Read the
 records before reading the total.
 
-The list is not everything the publisher never creates. Transfer and CreditCardPayment each
-move cash that the bank feed also reports, and neither was derived here. Narrow with
---entity_types when a client's workflow calls for it.
+Two more types belong to the same family and were left for a later unit: Transfer and
+CreditCardPayment each move cash the bank feed also reports. Narrow with --entity_types
+when a client's workflow calls for it.
 
 READ-ONLY: no QBO writes; the local staging DB is opened read-only (sqlite mode=ro) solely to
 read sync.external_id links — no local writes. Reuses the /qbo OAuth client and the
@@ -154,7 +153,7 @@ TAG_TOKEN = '[bk:'   # the publisher's idempotency-tag prefix (see _shared/locat
 _PAGE_SIZE = 100
 
 # Entity types the publisher TAGS. A record here WITHOUT [bk: is a direct entry. The four
-# types after them the publisher never creates, so every one in the window is direct.
+# types below those the publisher never creates, so every one in the window is direct.
 TAGGED_BY_PUBLISHER = ('JournalEntry', 'Invoice', 'Bill', 'CreditMemo',
                        'VendorCredit', 'Payment', 'BillPayment')
 ENTITY_MAP = {
