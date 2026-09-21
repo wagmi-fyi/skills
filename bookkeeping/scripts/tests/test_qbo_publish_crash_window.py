@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """The window between a QuickBooks create and the staging save (NO real QBO calls).
 
-The publisher creates the QuickBooks object, then writes its id into staging. The phase
-saved the database once at the end until this change, so a crash lost the ids of every
-object that had already posted and the next run created each one again. What each turn of
-the loop did now reaches the database before the next one reaches QuickBooks. A crash
-therefore costs the one object in flight.
+The publisher creates the QuickBooks object, then writes its id into staging. With one
+save at the end of a phase, a crash lost the id of every object that had already posted,
+and the next run created each one again. What each turn of the loop did now reaches the
+database before the next one reaches QuickBooks. A crash therefore costs the one object in
+flight.
 
-Closing that last one needs a record of the intent written before the create, which is a
-unit of its own. Two tests cover it: one passes and pins what the publisher does today, and
-one is an expected failure that says what should happen.
+Closing that last one needs a record of the intent written before the create, which is
+later work. Two tests cover it: one passes and pins what the publisher does today, and one
+is an expected failure that says what should happen.
 
 Run:
     python3 -m unittest scripts.tests.test_qbo_publish_crash_window
@@ -34,7 +34,7 @@ import scripts.tests.test_qbo_publish_consumed_credits as cc  # noqa: E402
 
 @unittest.skipUnless(cc.QBO_SDK_PRESENT, cc.SOR_SKIP_REASON)
 class CreateThenRecordTests(unittest.TestCase):
-    """Hole 2: the window between the QuickBooks create and the staging save."""
+    """The window between the QuickBooks create and the staging save."""
 
     def setUp(self):
         cc._load_modules()
