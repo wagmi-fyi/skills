@@ -53,7 +53,7 @@ def publish_credit_applications(
     default_bank_remote_id = config.get('qbo_default_bank_remote_id')
 
     for row in rows:
-        conn.commit()  # durable before the next QuickBooks call; see publish_payments
+        conn.commit()  # saved before the next QuickBooks call; see payments.py
 
         tap_id = row['tap_id']
 

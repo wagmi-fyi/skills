@@ -72,7 +72,7 @@ def publish_bill_payments(
 
     # ---- Consolidated settlement BillPayments ----
     for sid, group_rows in settlement_groups.items():
-        conn.commit()  # durable before the next QuickBooks call; see publish_payments
+        conn.commit()  # saved before the next QuickBooks call; see payments.py
 
         vc_taps = query_settlement_vendor_credit_apps(conn, sid)
 
@@ -259,7 +259,7 @@ def publish_bill_payments(
 
     # ---- Per-row singleton path (existing behavior, payable TAPs with no settlement_id) ----
     for row in singleton_rows:
-        conn.commit()  # durable before the next QuickBooks call; see publish_payments
+        conn.commit()  # saved before the next QuickBooks call; see payments.py
 
         tap_id = row['tap_id']
 
