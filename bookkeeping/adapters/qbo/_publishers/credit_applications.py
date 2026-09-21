@@ -53,6 +53,8 @@ def publish_credit_applications(
     default_bank_remote_id = config.get('qbo_default_bank_remote_id')
 
     for row in rows:
+        conn.commit()  # durable before the next QuickBooks call; see publish_payments
+
         tap_id = row['tap_id']
 
         # Pre-flight: both source CM/VC and target invoice/bill must be synced.
@@ -161,9 +163,6 @@ def publish_credit_applications(
             update_sync_success(conn, 'trade_account_payments', tap_id, ext_id)
             external_ids.append(ext_id)
             processed += 1
-            # Save before the next application. The id QBO returned is the only record that
-            # this object exists, and a run that dies with it unsaved posts it again.
-            conn.commit()
         else:
             errors.append({
                 'payment_id': tap_id,
