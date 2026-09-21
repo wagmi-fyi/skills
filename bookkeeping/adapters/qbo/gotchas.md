@@ -55,25 +55,26 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   one key, then run again. A row no metadata change can route has no remedy in the skill
   today, and that book publishes no bank-funded payments until the row is dealt with. Raise it.
 
-- **A bank-funded credit memo no phase will post holds back the payment phases.** The
-  consumed-credit selection reads the one sync status the run was given and takes rows with
-  no external id. A credit memo's payment row outside that still reduces its bank line, so
-  the line's payments stop agreeing with the money that arrived.
-  `DEPOSIT_CREDIT_OFF_STATUS` names each invoice row on that line and the message gives the
-  reason the credit row is out: its status, an id it already carries, or that somebody set
-  it to `ignore`. Put the credit row in the run's status and run again where it never
-  posted. Where it did post, its id belongs on the row. A bank-funded credit memo cannot be
-  suppressed while its invoices are unpublished: setting it to `ignore` leaves the invoices
-  to publish for more than the bank received, so the gate names them. Nothing in the skill
-  retires such a row today, which is the same gap as the unroutable row above. Raise it.
+- **A bank-funded credit memo nothing will post holds back the payment phases.** The
+  consumed-credit selection reads the one sync status the run was given.
+  `DEPOSIT_CREDIT_OFF_STATUS` names each invoice row on that credit's bank line, and the
+  message gives the reason the credit row sits outside the run. Put the credit row in the
+  run's status and run again when it never reached QuickBooks. When it did reach
+  QuickBooks, its id belongs on the row, and the gate then passes the line. Setting the row
+  to `ignore` passes the line too, because that says a person took responsibility for it.
+  Check what the bank line should publish before you do that: nothing else stops the
+  invoices posting for more than the bank received. No script in the skill sets either
+  value today, which is the same gap as the unroutable row above. Raise it.
 
-- **A run that dies can still re-post the one payment it was in the middle of.** Each row's
-  outcome reaches the database before the next row reaches QuickBooks, so a crash costs that
-  one payment and no others. It had reached QuickBooks without its id reaching staging, and
-  the next run posts it again. `scan_sor_direct_records.py` does not see such a duplicate,
-  because it carries the `[bk:]` tag like any published object. After a run that is known to
-  have died, the payment rows still unpublished are the ones to check: one of them may
-  already carry an object in QuickBooks.
+- **A run that dies can still re-post the one payment it was in the middle of.** In the
+  three payment publishers, each row's outcome reaches the database before the next row
+  reaches QuickBooks, so a crash costs that one payment. It had reached QuickBooks without
+  its id reaching staging, and the next run posts it again.
+  `scan_sor_direct_records.py` does not see such a duplicate, because it carries the
+  `[bk:]` tag like any published object. The invoice, bill and credit-document publishers
+  still save once at the end of their phase, so a crash there loses every id that phase
+  wrote. After a run that is known to have died, the rows still unpublished are the ones to
+  check, in `trade_accounts` as well as `trade_account_payments`.
 
 - **A book whose invoices already posted at full face shows one credit memo in
   `PAYOUT_PARTIALLY_PUBLISHED` or `PAYOUT_GROUP_INCOMPLETE`.** The bank is over by the credit, the
