@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
-"""Two holes in the QBO payments publisher (NO real QBO calls).
+"""A bank-funded credit memo the publisher will not post (NO real QBO calls).
 
-Hole 1, sync-status complementarity. The consumed-credit selection reads the one sync
-status the run was given. A credit memo's payment row it leaves behind still reduces its
-bank line, so the payments on that line stop agreeing with the money that arrived. The
-gate reads the credit rows in every status now and names the invoice rows on that line.
-A credit row carrying an external id is in QuickBooks already, and one set to ignore is a
-person's decision that it never will be, so neither strands its line.
+The consumed-credit selection reads the one sync status the run was given. A credit memo's
+payment row it leaves behind still reduces its bank line, so the payments on that line stop
+agreeing with the money that arrived. The gate reads the credit rows in every status and
+names the invoice rows on that line.
 
-Hole 2, create then record. The publisher creates the QuickBooks Payment, then writes its
-id into staging. The phase used to save the database once at the end, so a crash lost the
-ids of every object that had already posted. Each row's outcome is saved before the next
-row reaches QuickBooks now, so a crash costs the one object in flight. Closing that last
-one needs a record of the intent written before the create, which is a unit of its own.
-The test for it stays an expected failure here.
+A credit row carrying an external id, or set to ignore, has been dealt with. What tells a
+line repaired by the recipe in gotchas.md from one where somebody put the credit aside
+before anything posted is whether an invoice on that line has published. One has on a
+repaired line, so it passes. None has on the other, so its invoice rows are named.
 
-Five tests assert the gate stays quiet: an ordinary deposit, a repaired book, a bank line
-that takes a later payment, a deposit with no credit memo, and a second customer on one
-bank line. Three of them pass against the code as it stood before this check existed, so
-they guard against a check that names a row it should leave alone.
+This module also covers which refusal a half-posted deposit gets.
+
+Five tests assert the gate stays quiet: an ordinary deposit, a repaired line, a line that
+takes a later payment, a deposit with no credit memo, and a second customer on one bank
+line. Three of them pass against the code as it stood before this check existed, so they
+guard against a check that names a row it should leave alone.
 
 Run:
-    python3 -m unittest scripts.tests.test_qbo_publish_two_holes
+    python3 -m unittest scripts.tests.test_qbo_publish_stranded_credits
 """
 
 import json
 import os
-import sqlite3
 import sys
 import unittest
 from unittest import mock
@@ -204,43 +201,137 @@ class SyncStatusComplementarityTests(unittest.TestCase):
         self.assertEqual(self._named(), {(taps['R1'], 'DEPOSIT_CREDIT_OFF_STATUS'),
                                          (taps['R2'], 'DEPOSIT_CREDIT_OFF_STATUS')})
 
-    def test_a_credit_row_carrying_an_external_id_is_accounted_for(self):
-        """An external id means the credit reached QuickBooks. publish.py selects no such
-        row and scan_sor_direct_records.py counts it as accounted for, so it leaves its
-        bank line alone whatever status it carries."""
+    def test_a_credit_row_carrying_an_external_id_with_nothing_published_stops_the_run(self):
+        """An external id says the credit reached QuickBooks. Nothing on this bank line has
+        published, so the invoices would still publish for more than the bank received."""
         _, taps = cc.build_deposit(self.conn, {})
-        _set_sync(self.conn, taps['CM'], 'pending', external_id='QBO-PMT-4')
+        _set_sync(self.conn, taps['CM'], 'synced', external_id='QBO-CM-4')
+
+        self.assertEqual(self._named(), {(taps['R1'], 'DEPOSIT_CREDIT_OFF_STATUS'),
+                                         (taps['R2'], 'DEPOSIT_CREDIT_OFF_STATUS')})
+        message = self._gaps()[0]['error_message']
+        self.assertIn('QBO-CM-4', message)
+        self.assertIn('no invoice on this line has published', message)
+
+    def test_a_credit_row_carrying_an_external_id_on_a_posted_line_is_accounted_for(self):
+        """The same row on a line an invoice has already published from. That line is past
+        what this check can help with, so a later payment on it still publishes."""
+        _, taps = cc.build_deposit(self.conn, {})
+        _set_sync(self.conn, taps['R1'], 'synced', external_id='QBO-PMT-1')
+        _set_sync(self.conn, taps['CM'], 'synced', external_id='QBO-CM-4')
 
         self.assertEqual(self._gaps(), [])
+        self.assertIn(taps['R2'], self._singleton_ids())
 
-    def test_a_suppressed_credit_row_leaves_its_bank_line_alone(self):
-        """Setting a row to ignore says it will never reach QuickBooks. That is a person's
-        decision about the line, and the gate takes it, so a payment applied to the line
-        afterwards still publishes."""
+    def test_a_suppressed_credit_row_with_nothing_published_stops_the_run(self):
+        """Setting a row to ignore says it will never reach QuickBooks. Doing that before
+        any invoice on the line has published leaves the invoices to publish for more than
+        the bank received, so the gate names them."""
         _, taps = cc.build_deposit(self.conn, {})
         _set_sync(self.conn, taps['CM'], 'ignore')
+
+        self.assertEqual(self._named(), {(taps['R1'], 'DEPOSIT_CREDIT_OFF_STATUS'),
+                                         (taps['R2'], 'DEPOSIT_CREDIT_OFF_STATUS')})
+        self.assertIn('it is set to ignore', self._gaps()[0]['error_message'])
+
+    def test_voiding_the_credit_memo_clears_the_stop(self):
+        """A credit memo that should never post is voided. The gate reads no voided row, so
+        the line publishes."""
+        _, taps = cc.build_deposit(self.conn, {})
+        _set_sync(self.conn, taps['CM'], 'ignore')
+        self.conn.execute(
+            "UPDATE trade_accounts SET voided_at = '2026-04-20' WHERE id = "
+            "(SELECT trade_account_id FROM trade_account_payments WHERE id = ?)",
+            (taps['CM'],))
+        self.conn.commit()
 
         self.assertEqual(self._gaps(), [])
 
     def test_a_repaired_line_takes_a_later_payment(self):
         """The recipe in gotchas.md nets a credit into a posted Payment by hand and sets
-        the credit row to ignore. A payment applied to that bank line later has to publish,
-        because the credit is already accounted for in QuickBooks."""
+        the credit row to ignore. An invoice on that line has published, so a payment
+        applied to it later has to publish too."""
         import_id = cc.insert_import(self.conn, 90000)
         first = cc.insert_ta(self.conn, 'receivable', 60000, 'INV-A', {})
         cm_ta = cc.insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {})
         later = cc.insert_ta(self.conn, 'receivable', 40000, 'INV-B', {})
-        cc.insert_tap(self.conn, first, 60000, import_id=import_id)
+        tap_first = cc.insert_tap(self.conn, first, 60000, import_id=import_id)
         tap_cm = cc.insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
         tap_later = cc.insert_tap(self.conn, later, 40000, import_id=import_id)
         self.conn.commit()
-        _set_sync(self.conn, list(self.conn.execute(
-            "SELECT id FROM trade_account_payments WHERE trade_account_id = ?",
-            (first,)).fetchone())[0], 'synced', external_id='QBO-PMT-1')
+        _set_sync(self.conn, tap_first, 'synced', external_id='QBO-PMT-1')
         _set_sync(self.conn, tap_cm, 'ignore')
 
         self.assertEqual(self._gaps(), [])
         self.assertIn(tap_later, self._singleton_ids())
+
+    def test_a_settled_line_takes_the_same_two_answers(self):
+        """A settlement's deposit key is NULL, so the published-invoice test reads it the
+        same way a plain line is read."""
+        for published, expected in ((False, 2), (True, 0)):
+            with self.subTest(an_invoice_published=published):
+                conn, path = cc.make_temp_db()
+                try:
+                    import_id = cc.insert_import(conn, 90000)
+                    first = cc.insert_ta(conn, 'receivable', 60000, 'INV-1', {})
+                    cm_ta = cc.insert_ta(conn, 'credit_memo', 10000, 'CM-1', {})
+                    later = cc.insert_ta(conn, 'receivable', 40000, 'INV-2', {})
+                    taps = [cc.insert_tap(conn, first, 60000, import_id=import_id),
+                            cc.insert_tap(conn, cm_ta, 10000, import_id=import_id),
+                            cc.insert_tap(conn, later, 40000, import_id=import_id)]
+                    for tap_id in taps:
+                        conn.execute(
+                            "UPDATE trade_account_payments SET metadata = "
+                            "json_set(metadata, '$.settlement_id', 'SET-1') WHERE id = ?",
+                            (tap_id,))
+                    _set_sync(conn, taps[1], 'ignore')
+                    if published:
+                        _set_sync(conn, taps[0], 'synced', external_id='QBO-PMT-1')
+                    named = [g for g in cc.common.find_bank_funded_payment_gaps(
+                        conn, 'pending', None, None)
+                        if g['error_code'] == 'DEPOSIT_CREDIT_OFF_STATUS']
+                    self.assertEqual(len(named), expected)
+                finally:
+                    conn.close()
+                    os.remove(path)
+
+    def test_one_payout_posting_does_not_vouch_for_another(self):
+        """Two payouts settled on one bank line. A posted invoice under one payout says
+        nothing about the other, so the other's suppressed credit still stops the run."""
+        import_id = cc.insert_import(self.conn, 90000)
+        one_inv = cc.insert_ta(self.conn, 'receivable', 60000, 'INV-1', {'payout_id': 'PO-1'})
+        one_cm = cc.insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {'payout_id': 'PO-1'})
+        two_inv = cc.insert_ta(self.conn, 'receivable', 40000, 'INV-2', {'payout_id': 'PO-2'})
+        tap_one = cc.insert_tap(self.conn, one_inv, 60000, import_id=import_id)
+        tap_cm = cc.insert_tap(self.conn, one_cm, 10000, import_id=import_id)
+        tap_two = cc.insert_tap(self.conn, two_inv, 40000, import_id=import_id)
+        self.conn.commit()
+        _set_sync(self.conn, tap_cm, 'ignore')
+        _set_sync(self.conn, tap_two, 'synced', external_id='QBO-PMT-2')
+
+        self.assertEqual(self._named(), {(tap_one, 'DEPOSIT_CREDIT_OFF_STATUS')})
+
+    def test_a_credit_nobody_dealt_with_outranks_one_somebody_did(self):
+        """A line carrying two credits, one repaired and one errored. The errored one is
+        the reason a person can act on, so the message names it."""
+        import_id = cc.insert_import(self.conn, 80000)
+        inv_ta = cc.insert_ta(self.conn, 'receivable', 100000, 'INV-A', {})
+        done = cc.insert_ta(self.conn, 'credit_memo', 10000, 'CM-1', {})
+        stuck = cc.insert_ta(self.conn, 'credit_memo', 10000, 'CM-2', {})
+        posted = cc.insert_ta(self.conn, 'receivable', 20000, 'INV-B', {})
+        tap_inv = cc.insert_tap(self.conn, inv_ta, 100000, import_id=import_id)
+        tap_done = cc.insert_tap(self.conn, done, 10000, import_id=import_id)
+        tap_stuck = cc.insert_tap(self.conn, stuck, 10000, import_id=import_id)
+        tap_posted = cc.insert_tap(self.conn, posted, 20000, import_id=import_id)
+        self.conn.commit()
+        _set_sync(self.conn, tap_done, 'ignore')
+        _set_sync(self.conn, tap_stuck, 'error')
+        _set_sync(self.conn, tap_posted, 'synced', external_id='QBO-PMT-1')
+
+        self.assertEqual(self._named(), {(tap_inv, 'DEPOSIT_CREDIT_OFF_STATUS')})
+        message = self._gaps()[0]['error_message']
+        self.assertIn(tap_stuck, message)
+        self.assertIn('its sync status is error', message)
 
     def test_a_missing_sync_value_reads_as_words(self):
         """A row with no sync value at all. The message a person reads carries a phrase
@@ -352,171 +443,6 @@ class HalfPostedDepositTests(unittest.TestCase):
         self.conn.commit()
 
         self.assertEqual([r[0] for r in self._refusals()], ['PAYOUT_GROUP_INCOMPLETE'])
-
-
-@unittest.skipUnless(cc.QBO_SDK_PRESENT, cc.SOR_SKIP_REASON)
-class CreateThenRecordTests(unittest.TestCase):
-    """Hole 2: the window between the QuickBooks create and the staging save."""
-
-    def setUp(self):
-        cc._load_modules()
-        self.conn, self.path = cc.make_temp_db()
-        self.captured = []
-        self._next = [1000]
-
-    def tearDown(self):
-        self.conn.close()
-        os.remove(self.path)
-
-    def _fake_publish(self, client, rate_limiter, obj, env_path):
-        if len(self.captured) >= self._crash_after:
-            raise KeyboardInterrupt('the process was killed')
-        self._next[0] += 1
-        ext = str(self._next[0])
-        obj.Id = ext
-        self.captured.append(ext)
-        return ext, None
-
-    def _run(self, conn, crash_after=None, crash_before_record=False):
-        """crash_after: how many creates succeed before the process dies.
-        crash_before_record: die between the create and the staging write instead."""
-        self._crash_after = 10 ** 6 if crash_after is None else crash_after
-        patches = [
-            mock.patch.object(cc.payments_pub, 'publish_single_qbo_object', self._fake_publish),
-            mock.patch.object(cc.payments_pub.QBOPayment, 'save', lambda self, qb=None: self),
-        ]
-        if crash_before_record:
-            def die(*a, **k):
-                raise KeyboardInterrupt('the process was killed')
-            patches.append(mock.patch.object(cc.payments_pub, 'update_sync_success', die))
-        for p in patches:
-            p.start()
-        try:
-            cc.payments_pub.publish_payout_consumed_credits(
-                None, cc._FakeRL(), conn, {}, 'pending', None, None, '')
-        except KeyboardInterrupt:
-            pass
-        finally:
-            for p in patches:
-                p.stop()
-
-    def _reopen(self):
-        """A crash ends the process, so whatever was not saved is gone. Read the file back."""
-        self.conn.close()
-        self.conn = sqlite3.connect(self.path)
-        self.conn.row_factory = sqlite3.Row
-
-    def _deposits(self, n):
-        for i in range(n):
-            import_id = cc.insert_import(self.conn, 50000)
-            inv_ta = cc.insert_ta(self.conn, 'receivable', 60000, f'INV-{i}', {})
-            cm_ta = cc.insert_ta(self.conn, 'credit_memo', 10000, f'CM-{i}', {})
-            cc.insert_tap(self.conn, inv_ta, 60000, import_id=import_id)
-            cc.insert_tap(self.conn, cm_ta, 10000, import_id=import_id)
-        self.conn.commit()
-
-    def test_a_crash_costs_the_deposit_in_flight_and_no_others(self):
-        """Three deposits, the process killed after the second create. The two that posted
-        carry their ids, so the second run has one deposit left to post."""
-        self._deposits(3)
-        self._run(self.conn, crash_after=2)
-        self.assertEqual(len(self.captured), 2, 'two deposits reached QuickBooks')
-
-        self._reopen()
-        before = len(self.captured)
-        self._run(self.conn)
-        self.assertEqual(len(self.captured) - before, 1,
-                         'the second run posted the deposit that was in flight')
-
-    def test_a_deposit_is_on_the_file_before_the_next_one_posts(self):
-        """Read the database from a second connection while the run is still going. Two
-        deposits published so far means two rows already carry an id, whether or not the
-        phase ever reaches its end."""
-        self._deposits(3)
-        seen = []
-        other = sqlite3.connect(self.path)
-        self.addCleanup(other.close)
-        inner = self._fake_publish
-
-        def publish_and_peek(client, rate_limiter, obj, env_path):
-            result = inner(client, rate_limiter, obj, env_path)
-            seen.append(other.execute(
-                "SELECT COUNT(*) FROM trade_account_payments "
-                "WHERE json_extract(sync, '$.status') = 'synced'").fetchone()[0])
-            return result
-
-        self._crash_after = 10 ** 6
-        with mock.patch.object(cc.payments_pub, 'publish_single_qbo_object', publish_and_peek), \
-                mock.patch.object(cc.payments_pub.QBOPayment, 'save', lambda self, qb=None: self):
-            cc.payments_pub.publish_payout_consumed_credits(
-                None, cc._FakeRL(), self.conn, {}, 'pending', None, None, '')
-
-        # Two rows per deposit, and the count is read just after each create.
-        self.assertEqual(seen, [0, 2, 4])
-
-    def _singletons(self, n):
-        """Deposits with no credit memo, so the rows take the singleton path."""
-        for i in range(n):
-            import_id = cc.insert_import(self.conn, 60000)
-            inv_ta = cc.insert_ta(self.conn, 'receivable', 60000, f'INV-S{i}', {})
-            cc.insert_tap(self.conn, inv_ta, 60000, import_id=import_id)
-        self.conn.commit()
-
-    def _run_singletons(self, conn, crash_after=None):
-        self._crash_after = 10 ** 6 if crash_after is None else crash_after
-        with mock.patch.object(cc.payments_pub, 'publish_single_qbo_object',
-                               self._fake_publish), \
-                mock.patch.object(cc.payments_pub.QBOPayment, 'save',
-                                  lambda self, qb=None: self):
-            try:
-                cc.payments_pub.publish_payments(
-                    None, cc._FakeRL(), conn, {}, 'pending', None, None, '')
-            except KeyboardInterrupt:
-                pass
-
-    def test_the_singleton_path_costs_the_payment_in_flight_and_no_others(self):
-        """Most books spend most of their rows on the singleton path, so it takes the same
-        crash. Three plain invoice collections, the process killed after the second
-        create."""
-        self._singletons(3)
-        self._run_singletons(self.conn, crash_after=2)
-        self.assertEqual(len(self.captured), 2, 'two payments reached QuickBooks')
-
-        self._reopen()
-        before = len(self.captured)
-        self._run_singletons(self.conn)
-        self.assertEqual(len(self.captured) - before, 1,
-                         'the second run posted the payment that was in flight')
-
-    def test_today_a_crash_before_the_record_posts_the_deposit_twice(self):
-        """What the publisher does today in the window the per-row save cannot reach. This
-        passes, so a fixture that stops working turns it red. The expected failure below
-        says what should happen instead."""
-        self._deposits(1)
-        self._run(self.conn, crash_before_record=True)
-        self.assertEqual(len(self.captured), 1, 'the first run posted one Payment')
-
-        self._reopen()
-        before = len(self.captured)
-        self._run(self.conn)
-        self.assertEqual(len(self.captured) - before, 1,
-                         'the second run posted the same deposit again')
-
-    @unittest.expectedFailure
-    def test_a_crash_before_the_record_does_not_double_post(self):
-        """The one case the per-deposit save cannot reach. The Payment exists in QuickBooks
-        and staging never learned its id, so the next run posts it again. Closing this needs
-        the publisher to record what it is about to create before it creates, which is its
-        own unit."""
-        self._deposits(1)
-        self._run(self.conn, crash_before_record=True)
-        self.assertEqual(len(self.captured), 1, 'the first run posted one Payment')
-
-        self._reopen()
-        before = len(self.captured)
-        self._run(self.conn)
-        self.assertEqual(len(self.captured) - before, 0,
-                         'the second run leaves the posted deposit alone')
 
 
 if __name__ == '__main__':
