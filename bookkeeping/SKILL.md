@@ -3,7 +3,7 @@ name: bookkeeping
 license: Apache-2.0
 description: "AI-native bookkeeping: ingest, categorize, reconcile, and publish financial data with intent-based operations and principles-based quality. Use when processing bank transactions, categorizing expenses, managing trade accounts, running period closes, or onboarding new bookkeeping clients."
 metadata:
-  version: "5f6194c 2026-09-22"
+  version: "34b9659 2026-09-22"
 ---
 
 # Bookkeeping
