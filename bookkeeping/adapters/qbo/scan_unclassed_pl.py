@@ -19,15 +19,9 @@ Then two reports, both on the accrual basis, which is the basis the local ledger
 ProfitAndLoss summarized by Classes gives the column the client sees. QuickBooks keys that
 column `not_specified`.
 
-ProfitAndLossDetail names every transaction whose class is empty. The account a
-transaction posts to is the section header it sits under. Asking for the account as a
-column returns nothing and no error.
+ProfitAndLossDetail names every transaction whose class is empty.
 
-## Reading a column
-
-A column's identity is the entry named `ColKey` in its `MetaData`. `ColType` holds a data
-type and `ColTitle` holds a display label, so the names this script asks for are in
-neither.
+Column identity and the detail report's shape are in `gotchas.md`, Reports.
 
 ## The two sides
 
@@ -35,23 +29,21 @@ The summary is the account rollup the client reads. The detail names the records
 has to fix. Money on either side fails the gate, so no shape difference between the two
 reports can read as a clear gate over money with no class.
 
-Their totals go out side by side with `totals_agree`. A difference leaves the run
-standing, because an account row aggregates transactions of both signs, and because the
-sign conventions of the two reports have not been checked on a company carrying unclassed
-money. When the two disagree over whether there is any unclassed activity at all, the
-summary line says so.
+Their totals go out with `totals_agree`. A difference leaves the run standing: an account
+row aggregates both signs, and the two reports' sign conventions are unchecked on a company
+carrying unclassed money. A disagreement over whether any unclassed activity exists goes in
+the summary line.
 
-A company that tracks classes and whose detail report carries no class column cannot be
-read safely, so the scan raises. Read as an empty class, a missing column reports every
-transaction. Read as absent, it reports none.
+A company that tracks classes whose detail report carries no class column cannot be read
+safely, so the scan raises: a missing column read as empty reports every transaction, and
+read as absent reports none.
 
 ## What no live run has covered
 
 A company that tracks classes and carries unclassed money in the period. The key lookup is
-proven on a company that tracks none, where QuickBooks emits the column anyway. The detail
-report's class column is proven on a company that tracks them. No run has covered both at
-once, so the account rollup and the record list have never run against real unclassed
-money, and no record has had its account and id read off a live report.
+proven where the column exists and the detail's class column where classes exist, never
+both at once, so the account rollup and the record list are unproven against real unclassed
+money.
 
 ## Gate semantics
 
