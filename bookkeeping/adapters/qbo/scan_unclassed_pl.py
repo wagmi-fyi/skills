@@ -165,7 +165,7 @@ def parse_amount(raw, where):
 
     An empty cell means no activity in that class. A cell holding anything else means the
     report has a shape this script does not read, so it raises. Read as no activity, the
-    row would drop out of the finding without a word.
+    row would drop out of the finding unreported.
     """
     text = (raw or '').replace(',', '').strip()
     if not text:
