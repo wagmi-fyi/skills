@@ -17,6 +17,20 @@ Field-tested quirks of this SoR, reviewed by the Publish operation before every 
   ONE atomic Payment update carrying the charge and ALL credit links simultaneously. A worked
   example lives in the relevant client's period-close workpaper (§Publish).
 
+## Reports
+
+- **A report column's identity is the `MetaData` entry named `ColKey`.** `ColType` holds a
+  data type and `ColTitle` a display label. The names a report request asks for, such as
+  `klass_name`, appear in neither. Earned 2026-09-21.
+- **On `ProfitAndLossDetail` the account is the section a row sits in.** That section's
+  header carries the account name and its QBO id on its first cell. A header with no id is
+  a classification group (Income, Expenses) enclosing the accounts. Asking for
+  `account_name` as a column returns nothing and no error.
+- **A company with class tracking off still gets an unclassed column on `ProfitAndLoss`
+  summarized by Classes, holding the whole statement.** The detail report returns no class
+  column at all. Read `Preferences.AccountingInfoPrefs.ClassTrackingPerTxn` and
+  `ClassTrackingPerTxnLine` before reading either report.
+
 ## Human-relayed UI changes
 
 - **Wrong-company risk.** When a human flips a UI setting on request, their QBO browser session may

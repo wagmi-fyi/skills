@@ -88,13 +88,13 @@ Suppress only the **specific** known exceptions listed in `review-notes.md`; don
 
 **Intent:** The client reads the SoR's "Profit and Loss by Class", and money in its unclassed column belongs to no class. Staging cannot answer it: a record adopted during a close carries a class locally while the SoR original has none, and a record staging never created carries none at all.
 
-**Skip when the client does not use classes.** Every P&L line is then in that column. `review-notes.md` records which clients use them.
+**Not applicable when the company tracks no classes.** Every P&L line would be in that column. The scan reads the SoR preference and answers `class_tracking` false, and there is nothing to resolve.
 
 **Preconditions:** SoR credentials, the only Review check that needs any. For QBO, the OAuth block in `{local_dir}/adapters/.env`. Where the SoR is unreachable, record that as the result.
 
-**Script:** `adapters/qbo/scan_unclassed_pl.py --period_start {periodStart} --period_end {periodEnd}` for QBO. It reads two reports that have to agree, and fails saying so when they disagree. Read `success` and `error` as well as the exit code.
+**Script:** `adapters/qbo/scan_unclassed_pl.py --period_start {periodStart} --period_end {periodEnd}` for QBO. Read `success`, `class_tracking` and `error` as well as the exit code.
 
-**Flag when:** any account carries activity in the unclassed column. The finding names each account and amount, and each transaction with its date, type, document number, counterparty and SoR id.
+**Flag when:** any account carries activity in the unclassed column, or any transaction carries no class. The finding names each account and amount, and each transaction with its date, type, document number, counterparty and SoR id. When the two reports disagree over whether any exists, `summary` says so and both lists go in the finding.
 
 **What to record:** the flagged transactions, and the class the staging row holds for each. A correction made in Review is a system failure under Hard Stop 4, so the stamp goes on the SoR record on the next Publish pass, and a locked period routes through the user. A record staging never created has no class to take; adopt it first, and adopting alone leaves the class off.
 
