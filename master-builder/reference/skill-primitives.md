@@ -10,6 +10,8 @@ The design palette: which capabilities a skill composes, and the signals that ca
 
 **Credentials.** What a skill presents to an outside service to prove it may act. Two questions at design time pick the pattern. Does the credential change when it is used? Can two runs use it at the same moment? The patterns are in `reference/runtime-conventions.md` (Secrets). Signal: a call to an outside service that needs a key or a sign-in.
 
+**Schedules.** A step that runs on its own clock, with no session and no person: a poll, an import, an export, a check. A skill names the step, its cadence, and where its output lands; the mechanism that runs it belongs to the machine and the harness, never to the skill. Use whatever the machine offers, in this order: an operation another installed skill exposes for scheduling, then the harness's own scheduler for what one session needs, then the operating system's timers. A scheduled step reads its credentials the way any script does, writes only into the tree the skill owns, and reports failure somewhere a person reads. Signal: a step whose trigger is time, or a session timer that a restart would lose.
+
 **Workpapers** — durable run state in `_workpapers/`, period-named, human-readable. Signal: state being reconstructed from memory or scrollback.
 
 **Database** — structured, queryable state at `database/{skill-name}.db`. When selected, design the schema at the start — it shapes operations and scripts (`reference/database-patterns.md`). Signal: filtering, joining, or tracking state across entities.
