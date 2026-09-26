@@ -5,6 +5,8 @@ Make this machine ready to orchestrate. **Idempotent** — safe to re-run.
 ## Intent
 The bus exists and passes a health-check, the machine's substrate is identified, and the acts that substrate's runbook names are available. Report what the machine has, so `bootstrap`/`run`/`delegate` are working from fact.
 
+The skill needs no language packages. It needs `python3` for the bus, `git` for worktree lanes, and whatever the substrate's runbook names, the agent CLI included. The steps below check each one.
+
 ## Steps
 1. **Bus.** Resolve `bus_dir` (config; default `~/.claude/session-bus`). Run `scripts/bus handles` — if it runs, the bus is live (the CLI creates its dirs on first use).
 2. **Python 3.** The bus needs `python3` (stdlib only): `python3 --version`. Windows uses the automatic portable-lock shim, so nothing to do.

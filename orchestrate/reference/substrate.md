@@ -54,6 +54,8 @@ Every setting resolves in one order: **the environment, then the machine conf, t
 
 The seam exists because the shipped file is the layer a local ruling **cannot** be written into: under a managed install the skill folder is root-owned, and an edit there is either refused or overwritten by the next update. A ruling written where the skill cannot read it is silently lost, and a delegate spawned on an unread `delegate_model` runs a different model than its charter was written for.
 
+`config.yaml` says what each setting does and what it ships as. A run can override any setting for itself in its workpaper, under Standing Postures, Effective config. That override survives compaction, and `resume` asserts it again (`operations/checkpoint.md`). `scripts/spawn` hands every delegate the resolved `bus_dir` as a value. A machine-wide `SESSION_BUS_DIR` then cannot put a delegate on a bus its orchestrator is not reading.
+
 ## Runbooks
 
 | Substrate | File | Use when |
