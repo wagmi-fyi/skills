@@ -17,5 +17,6 @@ Each of these reaches nobody on a substrate whose runbook does not claim it.
 
 - `session-sweep --check|--dry-run`: ends an older process of a session once a newer one has run for a grace period and holds its socket. It runs beside `bus-nudge` as a machine service on its own timer.
 - `desktop-wake <handle>`: prints one line per new bus message, for a harness that can watch a background command. Run `--check` first, and again later to prove the watcher is still up.
+- `resume-hook --phrase|--check`: run by the harness on every prompt, it answers the resume phrase with this skill's front page as context and prints nothing for any other prompt. `--phrase` prints the phrase a rail sends. `--check` says in one line where the hook is registered and whether the page fits its cap.
 - `notify <title> <msg>`: a desktop alert and a terminal bell, for a machine the human sits at.
 - `present <file.html>`: opens a decision brief in a local browser.
