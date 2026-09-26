@@ -98,10 +98,9 @@ rail has no screen to answer the approval prompt on. The opt-in is
 `crossSessionInbound`, set once for the machine; a repository may tighten it,
 and a session started inside one that does is refused before anything is sent.
 
-**It refuses a session that has ended and never resumes one.** A resume forks:
-it makes a second copy under a new process and a new session id, and the
-original stays dead. So an idle-exited target is a gap this rail does not close,
-which is what the heartbeat below is now for.
+**It refuses a session that has ended and never resumes one.** Resuming is a
+deliberate act, the orchestrator's or a machine rail's, in the forms under
+Resuming a session below.
 
 **It nudges the newest process of a session.** A reconnect can leave the old
 process running beside the new one, both carrying the session id. The rail
@@ -126,6 +125,17 @@ The watcher is a process under a watch primitive that is itself bound to the ses
 `desktop-wake` announces its own exit on every signal it can catch. **It cannot catch a kill**, and after one there is no notice at all. So do not let silence stand for health: **`--check <handle>` reports the pids of any watcher already running for that handle**, and re-running it is how you prove a watch armed earlier is still up. Re-run it after a compaction, after a recovery, and at the start of any stretch the run depends on being woken. A watcher that dies at the moment its session stops looking is the failure this substrate has actually paid for, more than once.
 
 An *attended* run with no wake armed still works; `bus handles` unread counts are the truth in every configuration. The cost is latency.
+
+## Resuming a session
+
+Resuming has two forms, and the listing decides. A session with a background row
+carries its own saved options: resume it bare, because flags start a copy under a
+new id. A session with no such row takes the flags. Never resume a live session;
+that forks too. `claude stop` keeps the conversation; it takes the listing's short
+job `id`, and `--resume` takes the session id.
+
+The app moves a conversation to a new session id on its own. The handle then reads
+gone until the session re-registers from inside.
 
 ## The heartbeat — the slow backstop under the wake rail
 
