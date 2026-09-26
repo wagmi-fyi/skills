@@ -17,7 +17,7 @@ Agents bring the human in on two things only. A design crossroads is a trade-off
 
 ## Where a rule binds
 
-A rule that depends on being read is not enforced. A session's report of what it loaded is a claim. So a rule the run depends on sits in the boot instruction a session cannot skip, in a script that refuses, or in a gate a unit must pass to close. Prose in a reference file is documentation. `scripts/spawn` works this way.
+A rule that depends on being read is not enforced. A session's report of what it loaded is a claim. So a rule the run depends on sits in the boot instruction a session cannot skip, in a script that refuses, or in a gate a unit must pass to close. Prose in a reference file is documentation.
 
 ## Where the mechanism lives
 
