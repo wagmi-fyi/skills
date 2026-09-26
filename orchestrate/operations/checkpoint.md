@@ -1,6 +1,6 @@
-# Checkpoint — pin standing postures before a compaction
+# Checkpoint: write the standing postures down
 
-Run this **before you compact** the orchestrator (compaction is human-initiated here). A compaction compresses the contract and the state, and it silently resets **standing postures** — the working directives that accrued this run (drive/parallelize, auto-reap on, deploy-only-from-the-proven-chart, serialize-via-lease…). This operation distills them and pins them where the *next* context will re-read them, so they survive.
+Run this when a turn asks for it, and before a person compacts the session. A standing posture is a rule the run picked up along the way. It exists only in the session's context until it is written into the workpaper, and a session that ends or moves to a new id loses what was never written.
 
 > Pairs with `resume`: checkpoint **writes** the postures; resume **re-asserts** them. The workpaper's **Standing Postures** block is the carrier.
 
