@@ -28,6 +28,10 @@ created: {{date}}
 **Behavioral postures** — run-specific operating directives:
 - {{none yet}}   <!-- e.g. "Deploy only from the proven chart, base off the live tip, verify functionally not just the diff" -->
 
+**Skills in use**: each skill guiding this run and the operation it runs. `resume` re-invokes every row.
+- `orchestrate`, running `operations/run.md`
+- {{host skill, where the project composes on one}}, running {{its operation}}
+
 ## Work board
 Legend: ☐ todo · ▶ issued/in-flight · 🔎 reported, verifying · ✅ verified · ⏸ blocked · ⏸‖ paused (crossroads/human-only)
 | Unit | Type | Status | Dep | Gate (orchestrator re-verifies read-only) |
