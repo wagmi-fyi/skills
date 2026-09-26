@@ -66,6 +66,7 @@ setting delegate_model            MODEL      MODEL_SRC
 setting delegate_skip_permissions SKIP_RAW   SKIP_SRC
 setting spawn_mode                SPAWN_MODE SPAWN_MODE_SRC
 setting bus_dir                   BUS_DIR    BUS_DIR_SRC
+setting continuity_rail           RAIL       RAIL_SRC
 
 # The bus a delegate joins is decided here and handed over as a value. A boot
 # line that told the delegate to fall back on $SESSION_BUS_DIR handed the
@@ -75,6 +76,15 @@ setting bus_dir                   BUS_DIR    BUS_DIR_SRC
 [ -n "$BUS_DIR" ] || { BUS_DIR="$HOME/.claude/session-bus"; BUS_DIR_SRC="the bus default"; }
 BUS_DIR="${BUS_DIR/#\~/$HOME}"
 export SESSION_BUS_DIR="$BUS_DIR"
+
+# A machine may run a rail that resumes a gone orchestrator. Where one runs,
+# registering with the orchestrator role is the enrolment, and a session never
+# guesses which case holds.
+RAIL_STATE="none"
+if [ -n "$RAIL" ]; then
+  RAIL="${RAIL/#\~/$HOME}"
+  [ -x "$RAIL" ] && RAIL_STATE="present" || RAIL_STATE="declared, not executable"
+fi
 
 SKIP=""
 case "$(printf '%s' "$SKIP_RAW" | tr '[:upper:]' '[:lower:]')" in
@@ -131,13 +141,14 @@ done
 DETECTED="${AVAILABLE%% *}"
 
 json_env() {
-  printf '{"detected":"%s","available":"%s","substrate":"%s","substrate_source":"%s","spawn_mode":"%s","spawn_mode_source":"%s","delegate_model":"%s","delegate_model_source":"%s","delegate_skip_permissions":"%s","delegate_skip_permissions_source":"%s","bus_dir":"%s","bus_dir_source":"%s","machine_conf":"%s","tmux":"%s","claude_cli":"%s","mechanism":"%s"}\n' \
+  printf '{"detected":"%s","available":"%s","substrate":"%s","substrate_source":"%s","spawn_mode":"%s","spawn_mode_source":"%s","delegate_model":"%s","delegate_model_source":"%s","delegate_skip_permissions":"%s","delegate_skip_permissions_source":"%s","bus_dir":"%s","bus_dir_source":"%s","continuity_rail":"%s","continuity_rail_state":"%s","continuity_rail_source":"%s","machine_conf":"%s","tmux":"%s","claude_cli":"%s","mechanism":"%s"}\n' \
     "${DETECTED:-none}" "${AVAILABLE:-none}" \
     "${SUBSTRATE:-none}" "$SUBSTRATE_SRC" \
     "${SPAWN_MODE:-none}" "$SPAWN_MODE_SRC" \
     "${MODEL:-inherited}" "$MODEL_SRC" \
     "${SKIP_RAW:-none}" "$SKIP_SRC" \
     "$BUS_DIR" "$BUS_DIR_SRC" \
+    "${RAIL:-none}" "$RAIL_STATE" "$RAIL_SRC" \
     "$([ -r "$MACHINE_CONF" ] && echo "$MACHINE_CONF" || echo absent)" \
     "$([ -n "${TMUX:-}" ] && echo set || echo unset)" \
     "$(command -v claude 2>/dev/null || echo absent)" \
@@ -168,6 +179,11 @@ refuse_mismatch() {
 # --- preflight only ---------------------------------------------------------
 
 if [ "${1:-}" = "--check" ]; then
+  case "$RAIL_STATE" in
+    present) echo "continuity rail: $RAIL. Registering with the orchestrator role is the enrolment." >&2 ;;
+    none)    echo "continuity rail: none declared; a long run stands its own heartbeat (see the runbook)." >&2 ;;
+    *)       echo "continuity rail: $RAIL is $RAIL_STATE. That is a wall: stop and report it." >&2 ;;
+  esac
   if [ -z "$SUBSTRATE" ]; then
     if [ -z "$DETECTED" ]; then
       json_env absent

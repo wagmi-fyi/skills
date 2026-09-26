@@ -37,7 +37,7 @@ Any statement you make to the human about what is running comes from this pass, 
    Arming the delegate's finished-signal is part of launching, not a later nicety: in the same beat as the spawn, arm whatever one-shot done/idle notice your runbook offers for that session, so a delegate that ends without reporting still wakes you. A unit whose board row names no wake channel is not dispatched yet, whatever the session list says.
 4. **Stay lean** — do NOT do the unit's work. Read only the structured report that returns over the bus + the evidence it cites.
 5. **Re-verify read-only** — re-derive the unit's gate from source-of-truth (re-read the diff, re-run the named check, query read-only). The report is a *hypothesis* until re-derived.
-6. **Record** — update the board (▶→🔎→✅), a one-paragraph journal entry, and the human queue in the same beat: an answered ask drops off, a newly askable one lands, and the queue's header states the run state the journal just recorded. Nothing is "done" except recorded here with re-verified evidence, and the three surfaces move together. **Jot any posture that surfaced** into the workpaper's Standing Postures block as it appears, so the next `checkpoint` isn't reconstructed from memory. The board row for an in-flight unit records its armed wake (e.g. "wake: idle-notice armed" or "wake: manual, attended") — the beat's reconcile pass treats a row without one as a dispatch error to repair now.
+6. **Record** — update the board (▶→🔎→✅), a one-paragraph journal entry, and the human queue in the same beat: an answered ask drops off, a newly askable one lands, and the queue's header states the run state the journal just recorded. Nothing is "done" except recorded here with re-verified evidence, and the three surfaces move together. **Jot any posture that surfaced** into the workpaper's Standing Postures block as it appears, so the next `checkpoint` isn't reconstructed from memory. The board row for an in-flight unit records its armed wake (e.g. "wake: idle-notice armed" or "wake: manual, attended") — the beat's reconcile pass treats a row without one as a dispatch error to repair now. The skills-in-use block moves with the rest: a beat that starts working under a different skill, or a different operation of one, updates the block that beat.
 7. **Release** — fan out newly-unblocked units; **serialize the commitment step with a lease** (`bus lock <repo>:<resource> --holder orchestrator` before a merge/deploy/publish, `bus unlock` after — see `git.md`). One commitment per resource in flight.
 
 ## Signalling a delegate mid-unit
@@ -55,8 +55,8 @@ When you or a delegate hits a **design crossroads** or a **human-only/irreversib
 ## Blocker triage
 Resolve-from-data silently · re-charter or do-inline a stalled/failed unit · route genuine crossroads/human-only to the human (batched) · halt at a hard stop (data-loss, unsigned irreversible, un-re-derivable failure).
 
-## Before you compact
-Compaction silently resets standing postures. Before the human compacts, run `operations/checkpoint.md` — distill this run's postures, promote any that proved general (with the human's OK), and pin the rest to the workpaper's Standing Postures block so `resume` re-asserts them.
+## Keep the checkpoint current
+Postures reach the workpaper only when somebody writes them. Run `operations/checkpoint.md` when a turn asks for it, before a person compacts, and on your own judgement once this run's postures have moved. It writes the postures and the skills in use, and runs the condense check.
 
 ## Gate
 The project's definition-of-done (`plan.md`) is met and re-verified; the board is all ✅; the journal records the evidence.

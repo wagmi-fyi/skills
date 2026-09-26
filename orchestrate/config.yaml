@@ -40,3 +40,7 @@ delegate_skip_permissions: false
 # you know which model your charters are written for, because a charter that assumes a
 # model's dispositions and gets another one fails quietly rather than loudly.
 delegate_model: ""
+
+# A rail outside every session that resumes a gone orchestrator. Blank where none
+# is installed; `spawn --check` then says so.
+continuity_rail: ""
