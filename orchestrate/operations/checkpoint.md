@@ -5,9 +5,9 @@ Run this when a turn asks for it, and before a person compacts the session. A st
 > Pairs with `resume`: checkpoint **writes** the postures; resume **re-asserts** them. The workpaper's **Standing Postures** block is the carrier.
 
 ## Intent
-Leave the run so a resumed orchestrator re-grounds into the *same* postures and the *same* effective config it held a moment ago — nothing load-bearing lost to the compaction.
+Leave the run so a resumed orchestrator re-grounds into the *same* postures and the *same* effective config it held a moment ago — nothing load-bearing lost to the gap.
 
-## What a posture is (and isn't)
+## What a posture is
 A posture is a **standing directive that shapes future behavior** — not run narrative. The journal already holds "what happened"; postures are "how I operate on this run." Keep a candidate only if all three hold (the capture filter):
 1. **Changes future behavior** — a resumed orchestrator would act differently without it.
 2. **Not already captured** — not a core principle you'll reload anyway *unless this run overrides it*.
@@ -39,10 +39,10 @@ A promoted posture is **re-expressed medium-neutrally** before it lands in a cor
 - **The workpaper keeps the case law.** Mark the runtime posture PROMOTED (don't delete it) and leave its run-specific instances — filenames, incidents, dates — where they are. Evidence stays local; the principle goes global. That trail is what keeps a promoted principle auditable back to what earned it.
 
 ## The effective-config mechanism (why the override survives)
-The workpaper's **Effective config** block is the source of truth a resumed orchestrator reads **over** `config.yaml`. That's what makes a per-run override stick: set `spawn_mode: manual` there and a run whose delegates the human opens keeps working that way after a compaction, even though the skill default is `auto-spawn`. Record only the *deltas* from `config.yaml`, each with a one-line why.
+The workpaper's **Effective config** block is the source of truth a resumed orchestrator reads **over** `config.yaml`. That's what makes a per-run override stick: set `spawn_mode: manual` there and a run whose delegates the human opens keeps working that way after a resume, even though the skill default is `auto-spawn`. Record only the *deltas* from `config.yaml`, each with a one-line why.
 
 ## Write the checkpoint
-Refresh the workpaper's **Standing Postures** block (Effective config + Behavioral postures) so it is the current, complete set — add new, drop retired. It's a live snapshot, not an append log. Then add a one-line journal entry noting the checkpoint. **Also sweep the substrate before compacting:** put the board beside `bus handles` and reconcile them, per the runbook, so the postures you pin describe the sessions that actually exist. Record which in-flight delegates are live, which have exited, and where each lane stands. The workpaper is now the handoff.
+Refresh the workpaper's **Standing Postures** block (Effective config + Behavioral postures) so it is the current, complete set — add new, drop retired. It's a live snapshot, not an append log. Then add a one-line journal entry noting the checkpoint. **Also sweep the substrate before the pass ends:** put the board beside `bus handles` and reconcile them, per the runbook, so the postures you pin describe the sessions that actually exist. Record which in-flight delegates are live, which have exited, and where each lane stands. The workpaper is now the handoff.
 
 ## The skills in use
 The workpaper names each skill guiding this run and the operation it is running. Write that block every time this operation runs, and at any beat that changed it. Resume re-invokes every skill in the block, so a skill missing from it is a method the next context works without.
