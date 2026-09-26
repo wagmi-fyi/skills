@@ -109,6 +109,9 @@ workpaper. Write it once and put it in both places.
   two out loud every time. Where the project carries code, its repository sits
   inside the project directory as `src/` or a name the convention allows, and
   the repository above ignores that directory.
+- **The skills in use.** The project's workpaper names the skill guiding it and
+  the operation it runs. `bootstrap` fills the block for an orchestration; launch
+  seeds it for a project that runs under a skill.
 
 ## 5. Hand off
 
