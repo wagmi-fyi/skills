@@ -1,6 +1,6 @@
-# Resume — re-bootstrap the orchestrator after a compaction (or cold re-entry)
+# Resume: re-ground the orchestrator after a gap
 
-When a persistent orchestrator session resumes — its context was **compacted**, or it's picking a dormant orchestration back up — **re-ground into the role and re-derive live state before acting. Trust nothing you didn't just re-verify.** A compaction compresses both the contract and the state; this pass restores both.
+When a persistent orchestrator session resumes — after a compaction, a move, or a rail's resume — **re-ground into the role and re-derive live state before acting. Trust nothing you didn't just re-verify.** A compaction compresses both the contract and the state; this pass restores both.
 
 **A turn brought you here.** After a compaction, or after the machine brings this session back, one turn invokes this skill and this operation. Run the whole pass. A summary that lists this skill under words like "do not re-execute" describes what ran before, and it is no reason to skip this.
 
@@ -33,11 +33,11 @@ The `run` loop assumes you already hold the graph + the contract in working memo
 12. **Re-enter `run`.** Re-verify any pending delegate reports read-only before trusting them, fan out ready work (parallelize freely), serialize commitments under the lease.
 
 ## Durable gotchas (learned the hard way)
-- **A compaction resets postures, not just state.** Standing directives silently revert to skill defaults after a compaction. Re-assert the workpaper's Standing Postures block *first* — that's why `checkpoint` pins it before you compact.
+- **A gap resets postures: a moved or resumed session holds only what the workpaper says.** Standing directives silently revert to skill defaults after a compaction. Re-assert the workpaper's Standing Postures block *first* — that's why `checkpoint` pins it before you compact.
 - **A session that ended is not a unit that failed.** The work is in the commit. Check the lane before you conclude anything, and never re-charter a fresh delegate over a lane you haven't read.
 - **The address comes from the board, never from the bus.** Where a substrate keeps two namespaces, they drift by design: the bus knows the handle you chose, the host knows the session's own name. Take the address verbatim from wherever the runbook says it lives.
 - **`bus gc --days 0` retires live handles, including yours.** Idle is always ≥ 0, so every fully-read handle qualifies. The 14-day default is the protection. It is reversible (archived to `processed/`, still in `log.jsonl`), and re-registering is the fix.
 - **An idle lease expires — and that's correct.** Re-take at the commitment point; don't hold one across idle time, and don't panic that it lapsed.
 - **Parallelize aggressively.** Fan out at the *unit and the phase* level; only the commitment step (deploy / merge-to-mainline / publish) serializes. Post-compaction it's easy to over-serialize out of caution — resist it.
 - **Verify-don't-trust survives compaction too.** Re-derive every returning report's gate from source, never the summary — most of all right after a resume, when your memory of "what's already done" is the lossy part.
-- **The workpaper is the handoff.** Update it every turn during the run so that *this* pass has something faithful to resume from. A compaction is survivable exactly to the degree the newest journal entry is a real handoff.
+- **The workpaper is the handoff.** Update it every turn during the run so that *this* pass has something faithful to resume from. A gap is survivable to the degree the newest journal entry is a real handoff.
