@@ -61,9 +61,9 @@ Where done is objectively checkable — totals tie, tests pass, output validates
 A skill's needs beyond its own directory are declared, not discovered by failure:
 
 - **Script libraries** — declared inside the script where its ecosystem supports it (PEP 723 metadata for Python, for example) and resolved at invocation. The script carries its own requirements; there is no separate list to drift.
-- **Everything else** — CLIs, MCP servers, system tools: a short Dependencies section in SKILL.md naming each, why it's needed, and how to verify it's present.
+- **Everything else**, such as CLIs, MCP servers and system tools: named in the skill's install operation, each with why it is needed and how to check it is present. The front page points at that operation and lists nothing itself.
 
-Activation verifies declared dependencies before first use and guides installation.
+The install operation checks each declared dependency before first use and says how to add a missing one.
 
 ## Where Skills Live Locally
 
