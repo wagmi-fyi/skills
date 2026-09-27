@@ -137,6 +137,46 @@ job `id`, and `--resume` takes the session id.
 The app moves a conversation to a new session id on its own. The handle then reads
 gone until the session re-registers from inside.
 
+## The resume hook
+
+`scripts/resume-hook` makes a resume load this skill. The harness runs it on
+every prompt a session submits. When the whole prompt is the resume phrase, it
+prints this skill's `SKILL.md` as context, under a head that names the skill's
+directory. Any other prompt gets nothing. `resume-hook --phrase` prints the
+phrase.
+
+A turn written into a live session arrives as words, and the model then decides
+whether to load the skill. The hook takes the choice away.
+
+**Registration** is one entry under `UserPromptSubmit` in a settings file, with
+the command by full path:
+
+```json
+{"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "<skill directory>/scripts/resume-hook"}]}]}}
+```
+
+Merge it into the hooks the file already holds. It goes in the account's
+settings file, `~/.claude/settings.json`. A machine that manages settings for
+everybody puts it in its managed settings file instead, which on Linux is
+`/etc/claude-code/managed-settings.json`. Register it in one of the two. In both,
+the page arrives twice. The hook needs `jq`, and without it prints nothing.
+`resume-hook --check` reads both files and the page, and says in one line
+whether a resume would load it.
+
+**The cap.** The harness caps a hook's context at 10,000 characters and passes a
+short preview of anything longer. Two fields of about 8,800 characters each were
+driven and both reached the model whole. The hook refuses a page over 9,500
+characters, and the head fits in the rest. A page over the cap and a missing
+page each print one fixed line as the context. The line names the page and says
+to run the resume by hand. The same line goes to the system log under the tag
+`orchestrate-resume-hook` where `logger` exists.
+
+**The cost** on every other prompt is one shell and one string test. Measured
+with the process start included: 2 ms a prompt.
+
+**The seam.** A rail that resumes sessions sends the words
+`resume-hook --phrase` prints, and nothing else. It keeps no copy of its own.
+
 ## The heartbeat — the slow backstop under the wake rail
 
 The wake rail above carries the fast path, and it reaches only sessions that are still running. The heartbeat covers what it cannot: a target that idle-exited, a rail that is off, a bus nobody is watching. So its interval is now the worst case of a **missed** wake rather than of every wake, and it can be slow.

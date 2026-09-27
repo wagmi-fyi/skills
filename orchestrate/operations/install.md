@@ -14,11 +14,12 @@ The skill needs no language packages. It needs `python3` for the bus, `git` for 
 4. **Verify that substrate's declared dependencies.** Each runbook names what it needs and what it does with them. Check every one and report the version or the absence. **An absent dependency changes the run, not just the setup**: it usually forces `spawn_mode: manual` or removes the wake, and both belong in the workpaper before the first unit.
 5. **git.** `command -v git` — worktree/branch lanes for build units.
 6. **Confirm the reach to the human.** Establish which channel actually arrives on this machine, per the runbook's "what fails silently here" section, and record it. A run whose escalation path is a line of stdout nobody reads has no escalation path.
-7. **Shell convenience** (optional, ask first — never edit a shell rc unprompted): an alias for the bus CLI. It helps the human, not an agent, whose shell state resets between tool calls.
+7. **The resume hook.** Register `scripts/resume-hook` for this account in the form the substrate runbook gives, then run `scripts/resume-hook --check`. A machine that manages settings for everybody registers it once in its managed tier instead, as the same runbook says. Skip this step where the runbook gives no form.
+8. **Shell convenience** (optional, ask first; never edit a shell rc unprompted): an alias for the bus CLI. It helps the human, not an agent, whose shell state resets between tool calls.
 
 ## Health-check (report evidence)
 ```
 bus send _selftest _selftest ping ok && bus inbox _selftest   # shows 1 msg
 bus inbox _selftest                                            # shows none (cursor works)
 ```
-Report: bus ✅ + python3 version + the substrate you identified with the evidence for it + each runbook dependency present or absent + git → the available `spawn_mode` and wake. (The `_selftest` files under `bus_dir` are throwaway; remove if you like.)
+Report: bus ✅ + python3 version + the substrate you identified with the evidence for it + each runbook dependency present or absent + git + the resume hook's `--check` line → the available `spawn_mode` and wake. (The `_selftest` files under `bus_dir` are throwaway; remove if you like.)

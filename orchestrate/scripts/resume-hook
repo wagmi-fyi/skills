@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# orchestrate/resume-hook -- put this skill's front page in front of a session
+# whose prompt is the fixed resume phrase.
+#
+# The harness runs it on every prompt a session submits, once it is registered
+# for that prompt event. The substrate runbook that claims this script says how
+# it is registered and what was measured.
+#
+# WHY A HOOK ON THE RECEIVING SESSION. After a compaction, a rail that resumes
+# sessions writes one fixed phrase into a live session. A turn written into a
+# live session arrives as words, and the model then decides whether to load the
+# skill. This hook takes that decision away. The harness hands it the prompt's
+# text, and what it prints as additional context reaches the model before its
+# first token.
+#
+# ONE EXACT PHRASE, AND NOTHING ELSE MATCHES. A prompt that only contains the
+# phrase is not a match: a person quoting it in a sentence is asking about it.
+# Whitespace at either end is taken off first, because a typed prompt can carry
+# it. `--phrase` prints the phrase. A rail reads it from here.
+#
+# THE PAGE IS THE ONE BESIDE THIS SCRIPT. It is SKILL.md in the skill directory
+# this script sits in. That holds wherever the skill is installed.
+#
+# THE CAP IS A REFUSAL. The harness caps a hook's context at 10,000 characters.
+# Past that it passes a short preview, which is a cut page that reads like a
+# whole one. A page longer than PAGE_CAP characters is refused whole. The head
+# above the page fits in the difference.
+#
+# A REFUSAL IS SAID TO THE MODEL AND TO THE JOURNAL. A page over the cap and a
+# missing page each print one fixed line as the context, in place of the page.
+# The line names the page and says what to do by hand. The same line goes to
+# the system log under LOG_TAG where `logger` exists. Where it does not, that
+# half is skipped.
+#
+# THE COST ON EVERY OTHER PROMPT IS ONE SHELL AND ONE STRING TEST. Nothing is
+# forked before the test.
+#
+# THIS PROGRAM NEVER FAILS A SESSION. Every hook path exits 0. A prompt it
+# cannot read prints nothing. In every case the prompt goes on as typed.
+#
+#   resume-hook              the hook: reads the event on stdin
+#   resume-hook --phrase     print the phrase and nothing else; exit 0
+#   resume-hook --check      one line: where the hook is registered, the page's
+#                            length against the cap, and whether jq is here.
+#                            Exit 0 when a resume would load the page, else 1
+#   resume-hook --help
+#
+# RESUME_HOOK_MANAGED_SETTINGS moves the machine settings file --check reads,
+# for a control. The default is the harness's managed settings file.
+
+PHRASE="/orchestrate full resume operation please"
+PAGE_CAP=9500
+LOG_TAG="orchestrate-resume-hook"
+
+skill_dir() { (cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd); }
+
+# One line to the model as its context, and the same line to the journal.
+emit() {
+  if command -v logger >/dev/null 2>&1; then
+    logger -t "$LOG_TAG" -p user.warning -- "$1" 2>/dev/null || true
+  fi
+  jq -n --arg ctx "$1" \
+    '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $ctx}}' 2>/dev/null
+}
+
+# A settings file's state for this script: registered, not registered, no file
+# or unreadable. Registered means a UserPromptSubmit command resolves to this
+# script's own path.
+tier_state() { # tier_state <settings file> <this script, resolved>
+  [ -e "$1" ] || { printf 'no file'; return; }
+  [ -r "$1" ] || { printf 'unreadable'; return; }
+  local cmds c
+  cmds="$(jq -r '.hooks.UserPromptSubmit[]?.hooks[]? | select(.type == "command") | .command' "$1" 2>/dev/null)" \
+    || { printf 'unreadable'; return; }
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    if [ "$(readlink -f -- "$c" 2>/dev/null)" = "$2" ]; then printf 'registered'; return; fi
+  done <<< "$cmds"
+  printf 'not registered'
+}
+
+check() {
+  local me account machine page chars why=""
+  me="$(readlink -f -- "${BASH_SOURCE[0]}")"
+  account="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"
+  case "$(uname -s)" in
+    Darwin) machine="/Library/Application Support/ClaudeCode/managed-settings.json" ;;
+    *)      machine="/etc/claude-code/managed-settings.json" ;;
+  esac
+  machine="${RESUME_HOOK_MANAGED_SETTINGS:-$machine}"
+  page="$(skill_dir)/SKILL.md"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    printf 'resume-hook: jq is missing, so the hook prints nothing and no settings file can be read; not ready\n'
+    return 1
+  fi
+  local a m
+  a="$(tier_state "$account" "$me")"
+  m="$(tier_state "$machine" "$me")"
+  if [ -r "$page" ]; then
+    chars="$(LC_ALL=C.UTF-8 wc -m < "$page" | tr -d ' ')"
+    [ "$chars" -le "$PAGE_CAP" ] || why="the page is over the cap"
+    page="page ${chars} of ${PAGE_CAP} characters"
+  else
+    why="there is no page at ${page}"
+    page="no page"
+  fi
+  if [ "$a" = registered ] && [ "$m" = registered ]; then
+    why="${why:-registered in both, so the page arrives twice}"
+  elif [ "$a" != registered ] && [ "$m" != registered ]; then
+    why="${why:-registered in neither settings file}"
+  fi
+  printf 'resume-hook: account %s in %s; machine %s in %s; %s; %s\n' \
+    "$a" "$account" "$m" "$machine" "$page" "${why:+not ready: }${why:-ready}"
+  [ -z "$why" ]
+}
+
+case "${1-}" in
+  "") ;;
+  --phrase) printf '%s\n' "$PHRASE"; exit 0 ;;
+  --check)  check; exit $? ;;
+  -h|--help) sed -n '2,49p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  *) printf 'resume-hook: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+esac
+
+# The input is one small JSON object. `read -d ''` takes all of it with no fork.
+IFS= read -r -d '' input || true
+
+# THE FAST PATH. A prompt that does not carry the phrase anywhere cannot be the
+# phrase.
+case "$input" in
+  *"$PHRASE"*) ;;
+  *) exit 0 ;;
+esac
+
+command -v jq >/dev/null 2>&1 || exit 0
+prompt="$(printf '%s' "$input" | jq -r '.prompt // empty' 2>/dev/null)" || exit 0
+prompt="${prompt#"${prompt%%[![:space:]]*}"}"
+prompt="${prompt%"${prompt##*[![:space:]]}"}"
+[ "$prompt" = "$PHRASE" ] || exit 0
+
+dir="$(skill_dir)"
+page="${dir}/SKILL.md"
+if [ ! -r "$page" ]; then
+  emit "The resume hook did not load the orchestrate skill: there is no page at ${page}. Load the orchestrate skill and run its resume operation by hand."
+  exit 0
+fi
+
+# CHARACTERS, because the harness counts characters. Under a locale with no
+# UTF-8 the count is bytes, which is never fewer, so the refusal still holds.
+chars="$(LC_ALL=C.UTF-8 wc -m < "$page" | tr -d ' ')"
+if [ "$chars" -gt "$PAGE_CAP" ]; then
+  emit "The resume hook did not load the orchestrate skill: ${page} is ${chars} characters, over the hook's cap of ${PAGE_CAP}. Open that file and run its resume operation by hand."
+  exit 0
+fi
+
+# The head says where the page lives, because the page names its operations and
+# scripts by paths relative to that directory.
+body="$(LC_ALL=C.UTF-8 cat -- "$page")"
+head="The resume hook loaded the orchestrate skill because the prompt is its resume phrase. Base directory for this skill: ${dir}"
+jq -n --arg ctx "${head}"$'\n\n'"${body}" \
+  '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $ctx}}' 2>/dev/null
+exit 0
