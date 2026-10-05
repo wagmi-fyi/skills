@@ -35,53 +35,9 @@ The skill's agent calls the service and gets back a link. You send that link to 
 
 A firm key comes from one command, `adapters/ama_client.py signup`, which makes the firm on the service and saves its key for the adapter. The service keeps only a hash of the key, so a lost key means signing up again. The rest of the skill works with no bank feeds at all.
 
-## Agent install
+## Install
 
-Give this prompt to your agent:
-
-```
-Install the bookkeeping skill from WAGMI.
-
-Source: https://github.com/wagmi-fyi/skills/tree/main/bookkeeping
-
-Before you install anything:
-
-1. Read it first. Fetch SKILL.md and every file it references. Tell me in
-   plain terms what it does, what it touches on my machine, what it sends
-   over the network, and what credentials it expects. Name anything you
-   would not run yourself.
-
-2. Elicit until you're 95% confident you understand my intent. Ask what I
-   want this for, what my setup is, and what would make installing it a
-   mistake. Don't guess.
-
-3. Only then install it, to whichever path my agent reads:
-     ~/.claude/skills/bookkeeping     Claude Code
-     ~/.agents/skills/bookkeeping     the AGENTS.md convention
-     .claude/skills/bookkeeping       this project only
-   If I want QuickBooks, install the qbo skill the same way and in the
-   same place, so the two sit side by side. Then ask me which adapters I
-   plan to use, and set up only the packages those need from
-   requirements.txt.
-   Start a fresh session afterwards so it gets indexed.
-
-4. Set up my first client: copy templates/config-template.yaml into a
-   _local-bookkeeping/ folder in my project, fill in the paths, and ask me
-   which system of record my books publish to. Then ask me for any
-   credentials the adapters I chose need. Put them where this machine keeps
-   secrets when it has such a place. The adapters read the environment
-   first, then _local-bookkeeping/adapters/.env, and the Auth My Accountant
-   signup writes its firm key to that file. Keep that file out of git and
-   readable by me only. Never ask me to paste a secret into our
-   conversation.
-
-Stop and tell me if anything looks wrong, or if it needs something I
-don't have.
-```
-
-## Manual install
-
-Clone the repository, copy the `bookkeeping` folder into whichever skills directory your agent reads, and add `qbo` beside it if you need QuickBooks. Install the pins from `requirements.txt` for the adapters you actually use. Copy `templates/config-template.yaml` to `_local-bookkeeping/config.yaml` in your project and fill in the paths and the system of record. Adapter credentials come from the environment, or from `_local-bookkeeping/adapters/.env`, which stays out of git. `SKILL.md` covers the config chain in full.
+Install the `wagmi-skills` plugin, which holds this skill and `qbo`. [Install](../README.md#install) in the repository's README says how.
 
 ## First run
 

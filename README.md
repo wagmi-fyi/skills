@@ -116,10 +116,6 @@ sudo HOME=<shared-dir> <path-to-your-claude> plugin marketplace update wagmi
 Here, "update the copy the way it was installed" under [Staying current](#staying-current)
 means that command, and the admin runs it. A person's own agent cannot write the shared clone.
 
-On Claude Code, a skill from a plugin carries the plugin's name, as in
-`wagmi-skills:orchestrate`. So a person who also installs the plugin for themselves gets both
-copies, and the two names do not collide.
-
 Other routes fall short for this job:
 
 - A per-user plugin install reaches one person, and the next person to join the machine has
