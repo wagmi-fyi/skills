@@ -26,26 +26,30 @@ agent harness that can read a skill and run a script.
 
 ## Install
 
-On Claude Code, the plugin below installs all four skills in one command and keeps them current.
-Any other agent copies the directories in by hand.
+Every skill here comes in one plugin.
 
-### As a Claude Code plugin
+| | |
+|---|---|
+| Marketplace to add | `wagmi-fyi/skills` |
+| Its name once added | `wagmi` |
+| Plugin to install | `wagmi-skills` |
 
-```
-/plugin marketplace add wagmi-fyi/skills
-/plugin install wagmi-skills@wagmi
-```
+### In an app that takes plugins
 
-Restart Claude Code afterwards. A plugin puts its skills under its own name, so `bookkeeping`
-arrives as `wagmi-skills:bookkeeping`. Describe the work you want and the right one fires on its
-own, or name it that way to ask for it directly.
+Add the marketplace to your app. Install the plugin from it. Some apps want the full URL
+instead, `github.com/wagmi-fyi/skills`. Your app's plugin documentation has the current steps.
+Update the plugin through the same app.
 
-All four install together. `bookkeeping` finds `qbo` beside it that way, which is what its
-QuickBooks adapters need.
+### Let your agent do it
 
-Run `/plugin update wagmi-skills` to take a later version. The version is the commit this
-repository is on, so an update gives you whatever the most recent publish put here. Run
-`/plugin uninstall wagmi-skills` to remove them.
+Each skill on [wagmi.fyi/tools](https://wagmi.fyi/tools) has a prompt to paste to your agent.
+The agent then walks you through the install.
+
+### What the plugin holds
+
+The plugin holds the skill folders in this repository. A skill runs when your agent uses it.
+When it starts, it checks this repository for a newer version of itself.
+[Staying current](#staying-current) says how to control that.
 
 ### By hand, on any agent
 
@@ -58,10 +62,10 @@ either as a copy or as a symlink:
 | Anything on the AGENTS.md convention | `~/.agents/skills/<name>` |
 | One project only | `.claude/skills/<name>` or `.agents/skills/<name>` in the repo |
 
-Start a fresh session afterwards so the skill gets indexed. Then ask for it by name.
+Start a new session afterwards. Agents load skills when a session starts. Describe the work you
+want, and the agent picks the skill that fits.
 
-Keep the directory name as it ships. The format requires the `name` in a skill's frontmatter to
-match its parent directory, so a rename on the way in breaks the skill.
+Keep the directory name as it ships. A skill's frontmatter `name` must match its directory name.
 
 Some skills carry their own dependencies or expect a companion skill. Read the `SKILL.md` before
 first use; anything a skill needs is stated there.
